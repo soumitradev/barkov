@@ -16,12 +16,12 @@ type CompressedChoices struct {
 type CompressedModel = map[State]CompressedChoices
 
 type CompressedChain struct {
-	model     CompressedModel
+	Model     CompressedModel
 	stateSize int
 }
 
 type Chain struct {
-	model        Model
+	Model        Model
 	beginChoices []string
 	beginCumDist []int
 	stateSize    int

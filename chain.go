@@ -9,7 +9,7 @@ import (
 func InitChain(contextSize int) *Chain {
 	return &Chain{
 		stateSize: contextSize,
-		model:     make(Model),
+		Model:     make(Model),
 	}
 }
 
@@ -28,7 +28,7 @@ func calculateCumDist(next map[string]int) ([]string, []int) {
 
 func (chain *Chain) precomputeBeginState() {
 	beginState := slices.Repeat([]string{BEGIN}, chain.stateSize)
-	chain.beginChoices, chain.beginCumDist = calculateCumDist(chain.model[ConstructState(beginState)])
+	chain.beginChoices, chain.beginCumDist = calculateCumDist(chain.Model[ConstructState(beginState)])
 }
 
 func (chain *Chain) Build(corpus [][]string) *Chain {
@@ -40,15 +40,15 @@ func (chain *Chain) Build(corpus [][]string) *Chain {
 			state := ConstructState(items[i : i+chain.stateSize])
 			follow := items[i+chain.stateSize]
 
-			if _, ok := chain.model[state]; !ok {
-				chain.model[state] = make(map[string]int)
+			if _, ok := chain.Model[state]; !ok {
+				chain.Model[state] = make(map[string]int)
 			}
 
-			if _, ok := chain.model[state][follow]; !ok {
-				chain.model[state][follow] = 0
+			if _, ok := chain.Model[state][follow]; !ok {
+				chain.Model[state][follow] = 0
 			}
 
-			chain.model[state][follow]++
+			chain.Model[state][follow]++
 		}
 	}
 
@@ -59,12 +59,12 @@ func (chain *Chain) Build(corpus [][]string) *Chain {
 func (chain *Chain) Compress() *CompressedChain {
 	compressedChain := CompressedChain{
 		stateSize: chain.stateSize,
-		model:     make(CompressedModel),
+		Model:     make(CompressedModel),
 	}
 
-	for state, choices := range chain.model {
+	for state, choices := range chain.Model {
 		nextChoices, cumDist := calculateCumDist(choices)
-		compressedChain.model[state] = CompressedChoices{
+		compressedChain.Model[state] = CompressedChoices{
 			choices: nextChoices,
 			cumDist: cumDist,
 		}
@@ -74,24 +74,24 @@ func (chain *Chain) Compress() *CompressedChain {
 }
 
 func (chain *Chain) move(state State) (string, error) {
-	if _, ok := chain.model[state]; !ok {
+	if _, ok := chain.Model[state]; !ok {
 		return "", ErrStateNotFound
 	}
 
 	if state == ConstructState(slices.Repeat([]string{BEGIN}, chain.stateSize)) {
 		return chain.beginChoices[chooseToken(chain.beginCumDist)], nil
 	} else {
-		choices, cumDist := calculateCumDist(chain.model[state])
+		choices, cumDist := calculateCumDist(chain.Model[state])
 		return choices[chooseToken(cumDist)], nil
 	}
 }
 
 func (chain *CompressedChain) move(state State) (string, error) {
-	if _, ok := chain.model[state]; !ok {
+	if _, ok := chain.Model[state]; !ok {
 		return "", ErrStateNotFound
 	}
 
-	nextChoices := chain.model[state]
+	nextChoices := chain.Model[state]
 	choiceIndex := chooseToken(nextChoices.cumDist)
 	return nextChoices.choices[choiceIndex], nil
 }
