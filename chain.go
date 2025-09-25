@@ -65,8 +65,8 @@ func (chain *Chain) Compress() *CompressedChain {
 	for state, choices := range chain.Model {
 		nextChoices, cumDist := calculateCumDist(choices)
 		compressedChain.Model[state] = CompressedChoices{
-			choices: nextChoices,
-			cumDist: cumDist,
+			Choices: nextChoices,
+			CumDist: cumDist,
 		}
 	}
 
@@ -92,8 +92,8 @@ func (chain *CompressedChain) move(state State) (string, error) {
 	}
 
 	nextChoices := chain.Model[state]
-	choiceIndex := chooseToken(nextChoices.cumDist)
-	return nextChoices.choices[choiceIndex], nil
+	choiceIndex := chooseToken(nextChoices.CumDist)
+	return nextChoices.Choices[choiceIndex], nil
 }
 
 func (chain *Chain) getStateSize() int {

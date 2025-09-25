@@ -9,8 +9,8 @@ type State = string
 type Model = map[State]map[string]int
 
 type CompressedChoices struct {
-	cumDist []int
-	choices []string
+	CumDist []int
+	Choices []string
 }
 
 type CompressedModel = map[State]CompressedChoices
