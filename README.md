@@ -27,11 +27,12 @@ This is an exhaustive example for all features of this library.
 package main
 
 import (
-	"github.com/soumitradev/barkov"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/soumitradev/barkov"
 )
 
 const STATE_SIZE = 4
@@ -92,13 +93,13 @@ func main() {
 
 	fmt.Println("Finished building corpus and context!")
 	fmt.Printf("State Size: %d\n", STATE_SIZE)
-	chain := InitChain(STATE_SIZE).Build(corpus).Compress()
+	chain := barkov.InitChain(STATE_SIZE).Build(corpus).Compress()
 	fmt.Println("Finished building and compiling markov model!")
 
 	fmt.Println("Printing 5 random sentences first:")
 	for range 5 {
 		// Use the threaded version of the generation function with validator and timeout
-		generated, err := GenThreaded(chain, validator, TIMEOUT)
+		generated, err := barkov.GenThreaded(chain, validator, TIMEOUT)
 		if err != nil {
 			fmt.Println("[ERROR]", err)
 			continue
@@ -108,9 +109,9 @@ func main() {
 
 	fmt.Println("Printing 5 random sentences with start states:")
 	for range 5 {
-		start := ConstructState([]string{"i", "did", "not"})
+		start := barkov.ConstructState([]string{"i", "did", "not"})
 		// You can even provide a start state
-		generated, err := GenThreadedWithStart(chain, start, validator, TIMEOUT)
+		generated, err := barkov.GenThreadedWithStart(chain, start, validator, TIMEOUT)
 		if err != nil {
 			fmt.Println("[ERROR]", err)
 			continue
