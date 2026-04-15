@@ -33,6 +33,20 @@ type GenerativeChain interface {
 	move(state State) (string, error)
 }
 
+// GenericGenerativeChain is the minimum interface needed to generate text.
+// Unlike the legacy GenerativeChain, this uses EXPORTED methods so users
+// in other packages can implement it.
+//
+// This will be renamed to GenerativeChain in Phase C after the legacy
+// interface is removed.
+type GenericGenerativeChain[T comparable] interface {
+	StateSize() int
+	MaxOverlap() int
+	Sentinels() Sentinels[T]
+	Encoder() StateEncoder[T]
+	Move(state string) (T, error)
+}
+
 type Result struct {
 	err   error
 	words []string

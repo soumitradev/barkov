@@ -6,6 +6,9 @@ import (
 	"sort"
 )
 
+// Compile-time check that GenericChain implements GenericGenerativeChain.
+var _ GenericGenerativeChain[string] = (*GenericChain[string])(nil)
+
 // Sentinels bundles the begin/end tokens for a given Token type.
 // Users choose values that won't collide with real tokens in their corpus.
 type Sentinels[T comparable] struct {
@@ -97,7 +100,7 @@ func (c *GenericChain[T]) precomputeBeginState() {
 // Implements GenericGenerativeChain[T].
 func (c *GenericChain[T]) StateSize() int           { return c.stateSize }
 func (c *GenericChain[T]) MaxOverlap() int          { return c.stateSize + 2 }
-func (c *GenericChain[T]) GetSentinels() Sentinels[T]  { return c.sentinels }
+func (c *GenericChain[T]) Sentinels() Sentinels[T] { return c.sentinels }
 func (c *GenericChain[T]) Encoder() StateEncoder[T] { return c.encoder }
 
 // Move transitions from a state to a randomly chosen next token.
