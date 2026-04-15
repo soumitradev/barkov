@@ -153,6 +153,20 @@ func BenchmarkGenWithSeed(b *testing.B) {
 	}
 }
 
+// --- End-to-end ---
+
+// BenchmarkEndToEnd measures the full pipeline: build the chain from the
+// corpus, compress it, and generate one sentence. Tracks cumulative
+// speedup across versions.
+func BenchmarkEndToEnd(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		chain := InitChain(4).Build(testCorpus)
+		compressed := chain.Compress()
+		Gen(ctx, compressed) //nolint
+	}
+}
+
 // --- Validator ---
 
 func BenchmarkValidatorCall(b *testing.B) {

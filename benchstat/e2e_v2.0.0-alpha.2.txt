@@ -1,0 +1,16 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor
+BenchmarkEndToEnd-24    	       2	 798792865 ns/op	275841352 B/op	 1786302 allocs/op
+BenchmarkEndToEnd-24    	       2	 599289360 ns/op	275895952 B/op	 1786306 allocs/op
+BenchmarkEndToEnd-24    	       2	 504735850 ns/op	275814112 B/op	 1786302 allocs/op
+BenchmarkEndToEnd-24    	       2	 516850277 ns/op	275841312 B/op	 1786301 allocs/op
+BenchmarkEndToEnd-24    	       2	 543365606 ns/op	275813992 B/op	 1786300 allocs/op
+BenchmarkEndToEnd-24    	       2	 605445278 ns/op	275841376 B/op	 1786302 allocs/op
+BenchmarkEndToEnd-24    	       2	 555927776 ns/op	275841896 B/op	 1786309 allocs/op
+BenchmarkEndToEnd-24    	       2	 657872644 ns/op	275841032 B/op	 1786299 allocs/op
+BenchmarkEndToEnd-24    	       2	 510663118 ns/op	275868392 B/op	 1786301 allocs/op
+BenchmarkEndToEnd-24    	       2	 550679020 ns/op	275896008 B/op	 1786307 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	13.806s
