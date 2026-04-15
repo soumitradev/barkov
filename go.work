@@ -1,0 +1,7 @@
+go 1.25.5
+
+use (
+	.
+	./hashers/xxh3
+	./hashers/xxhash64
+)
