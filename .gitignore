@@ -5,7 +5,15 @@ MIGRATION.md
 
 # Benchmark audit snapshots
 benchstat/public_api_*.txt
+benchstat/compat_floor_interned.txt
 
 # Build artifacts and profiling output
 *.test
 *.prof
+
+# Local tooling
+mise.toml
+.remember/
+
+# Extra test data
+testdata/corpus_50k.txt
