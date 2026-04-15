@@ -1,0 +1,79 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkBuild-4              	       4	 318088294 ns/op	234484576 B/op	 1777391 allocs/op
+BenchmarkBuild-4              	       4	 320459253 ns/op	234511872 B/op	 1777393 allocs/op
+BenchmarkBuild-4              	       4	 288213772 ns/op	234511884 B/op	 1777393 allocs/op
+BenchmarkBuild-4              	       4	 282834310 ns/op	234539168 B/op	 1777395 allocs/op
+BenchmarkBuild-4              	       4	 283960491 ns/op	234498224 B/op	 1777392 allocs/op
+BenchmarkCompress-4           	       4	 263382681 ns/op	41313224 B/op	    8882 allocs/op
+BenchmarkCompress-4           	       4	 260634603 ns/op	41313200 B/op	    8882 allocs/op
+BenchmarkCompress-4           	       4	 261028622 ns/op	41313200 B/op	    8882 allocs/op
+BenchmarkCompress-4           	       4	 269183277 ns/op	41313200 B/op	    8882 allocs/op
+BenchmarkCompress-4           	       4	 258644940 ns/op	41313200 B/op	    8882 allocs/op
+BenchmarkConstructState-4     	37762420	        35.15 ns/op	      48 B/op	       1 allocs/op
+BenchmarkConstructState-4     	36665541	        36.58 ns/op	      48 B/op	       1 allocs/op
+BenchmarkConstructState-4     	33944436	        37.16 ns/op	      48 B/op	       1 allocs/op
+BenchmarkConstructState-4     	33367012	        36.64 ns/op	      48 B/op	       1 allocs/op
+BenchmarkConstructState-4     	36259893	        36.42 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDeconstructState-4   	24257155	        65.26 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDeconstructState-4   	21929049	        54.01 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDeconstructState-4   	24757280	        55.70 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDeconstructState-4   	23559144	        55.59 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDeconstructState-4   	25529214	        54.60 ns/op	      64 B/op	       1 allocs/op
+BenchmarkGen-4                	  208362	      4808 ns/op	    2645 B/op	      26 allocs/op
+BenchmarkGen-4                	  254371	      4821 ns/op	    2646 B/op	      26 allocs/op
+BenchmarkGen-4                	  237877	      4670 ns/op	    2646 B/op	      26 allocs/op
+BenchmarkGen-4                	  249571	      4870 ns/op	    2646 B/op	      26 allocs/op
+BenchmarkGen-4                	  248124	      4760 ns/op	    2645 B/op	      26 allocs/op
+BenchmarkGenIter-4            	  254325	      4843 ns/op	    2557 B/op	      24 allocs/op
+BenchmarkGenIter-4            	  217506	      4965 ns/op	    2558 B/op	      24 allocs/op
+BenchmarkGenIter-4            	  234176	      4909 ns/op	    2558 B/op	      24 allocs/op
+BenchmarkGenIter-4            	  257694	      4942 ns/op	    2558 B/op	      24 allocs/op
+BenchmarkGenIter-4            	  235639	      5031 ns/op	    2558 B/op	      24 allocs/op
+BenchmarkGenWithValidator-4   	  278823	      3744 ns/op	    2256 B/op	      22 allocs/op
+BenchmarkGenWithValidator-4   	  372559	      3297 ns/op	    2257 B/op	      22 allocs/op
+BenchmarkGenWithValidator-4   	  359809	      3662 ns/op	    2256 B/op	      22 allocs/op
+BenchmarkGenWithValidator-4   	  375925	      3230 ns/op	    2256 B/op	      22 allocs/op
+BenchmarkGenWithValidator-4   	  376082	      3213 ns/op	    2257 B/op	      22 allocs/op
+BenchmarkGenThreaded-4        	   10000	    147545 ns/op	  321266 B/op	    1833 allocs/op
+BenchmarkGenThreaded-4        	   10000	    180817 ns/op	  321475 B/op	    1837 allocs/op
+BenchmarkGenThreaded-4        	    7076	    233096 ns/op	  321541 B/op	    1839 allocs/op
+BenchmarkGenThreaded-4        	    6894	    224365 ns/op	  321445 B/op	    1837 allocs/op
+BenchmarkGenThreaded-4        	    8497	    228209 ns/op	  321593 B/op	    1839 allocs/op
+BenchmarkGenWithSeed-4        	  246354	      4858 ns/op	    2694 B/op	      27 allocs/op
+BenchmarkGenWithSeed-4        	  249325	      4979 ns/op	    2694 B/op	      27 allocs/op
+BenchmarkGenWithSeed-4        	  218352	      4997 ns/op	    2695 B/op	      27 allocs/op
+BenchmarkGenWithSeed-4        	  253800	      4877 ns/op	    2693 B/op	      27 allocs/op
+BenchmarkGenWithSeed-4        	  251139	      4735 ns/op	    2694 B/op	      27 allocs/op
+BenchmarkEndToEnd-4           	       2	 556749452 ns/op	275813912 B/op	 1786299 allocs/op
+BenchmarkEndToEnd-4           	       2	 513291148 ns/op	275896048 B/op	 1786309 allocs/op
+BenchmarkEndToEnd-4           	       2	 514055078 ns/op	275786792 B/op	 1786299 allocs/op
+BenchmarkEndToEnd-4           	       2	 514824490 ns/op	275841120 B/op	 1786298 allocs/op
+BenchmarkEndToEnd-4           	       2	 508357540 ns/op	275868744 B/op	 1786306 allocs/op
+BenchmarkValidatorCall-4      	19591827	        66.93 ns/op	      96 B/op	       1 allocs/op
+BenchmarkValidatorCall-4      	19260604	        69.64 ns/op	      96 B/op	       1 allocs/op
+BenchmarkValidatorCall-4      	18913086	        70.82 ns/op	      96 B/op	       1 allocs/op
+BenchmarkValidatorCall-4      	19299292	        68.85 ns/op	      96 B/op	       1 allocs/op
+BenchmarkValidatorCall-4      	18852200	        69.66 ns/op	      96 B/op	       1 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	76.568s
+?   	github.com/soumitradev/barkov/v2/hashers	[no test files]
+PASS
+ok  	github.com/soumitradev/barkov/v2/hashers/fnv	0.002s
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2/interned
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkEndToEnd-4   	       2	 509126167 ns/op	184183328 B/op	 1833451 allocs/op
+BenchmarkEndToEnd-4   	       2	 536358309 ns/op	183908888 B/op	 1833422 allocs/op
+BenchmarkEndToEnd-4   	       2	 645845026 ns/op	183854256 B/op	 1833413 allocs/op
+BenchmarkEndToEnd-4   	       3	 495342667 ns/op	183857845 B/op	 1833418 allocs/op
+BenchmarkEndToEnd-4   	       2	 523663992 ns/op	183836544 B/op	 1833419 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2/interned	6.011s
+PASS
+ok  	github.com/soumitradev/barkov/v2/nhash	0.002s
+PASS
+ok  	github.com/soumitradev/barkov/v2/stuck	0.028s
