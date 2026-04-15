@@ -52,8 +52,23 @@ func genIterSingle[T comparable](
 		encoder := chain.Encoder()
 		maxOverlap := chain.MaxOverlap()
 
+		// Allocate state window and history, reusing pool slices when available.
+		var state, history []T
+		if cfg.pool != nil {
+			sp := cfg.pool.GetState()
+			hp := cfg.pool.GetGenerated()
+			defer func() {
+				cfg.pool.PutState(sp)
+				cfg.pool.PutGenerated(hp)
+			}()
+			state = (*sp)[:0]
+			history = (*hp)[:0]
+		} else {
+			state = make([]T, 0, stateSize)
+			history = make([]T, 0, 64)
+		}
+
 		// Build initial state, padding with Begin tokens if needed
-		state := make([]T, 0, stateSize)
 		for i := 0; i < stateSize-len(cfg.seed); i++ {
 			state = append(state, sentinels.Begin)
 		}
@@ -63,9 +78,6 @@ func genIterSingle[T comparable](
 			// Seed is longer than state size, use the last stateSize tokens
 			state = append(state, cfg.seed[len(cfg.seed)-stateSize:]...)
 		}
-
-		// Track history for validator
-		history := make([]T, 0, 64)
 
 		// Yield seed tokens (without sentinels) up front
 		for _, tok := range cfg.seed {
@@ -129,6 +141,16 @@ func genIterThreaded[T comparable](
 			err    error
 		}
 
+		encoder := chain.Encoder()
+		seedKey := encoder.Encode(cfg.seed)
+
+		// Short-circuit if this seed is known-stuck
+		if cfg.stuckCache != nil && cfg.stuckCache.IsStuck(seedKey) {
+			var zero T
+			yield(zero, fmt.Errorf("barkov: seed is stuck: %w", ErrStateNotFound))
+			return
+		}
+
 		// Create a cancellable context for workers
 		workerCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -153,7 +175,6 @@ func genIterThreaded[T comparable](
 				var tokens []T
 				for tok, err := range genIterSingle(workerCtx, chain, workerCfg) {
 					if err != nil {
-						// Check if it's a validation failure (retryable) vs state not found (not retryable)
 						select {
 						case resultCh <- result{err: err}:
 						case <-workerCtx.Done():
@@ -178,22 +199,24 @@ func genIterThreaded[T comparable](
 
 		// Collect results, return first success
 		var lastErr error
-		successCount := 0
-		failCount := 0
 
 		for res := range resultCh {
 			if res.err != nil {
 				lastErr = res.err
-				failCount++
-				// If it's a non-retryable error, cancel other workers
+				if cfg.stuckCache != nil {
+					cfg.stuckCache.RecordFailure(seedKey)
+				}
+				// Non-retryable: cancel remaining workers
 				if res.err == ErrStateNotFound {
 					cancel()
 				}
 				continue
 			}
 
-			// Success! Cancel other workers and replay tokens
-			successCount++
+			// Success
+			if cfg.stuckCache != nil {
+				cfg.stuckCache.RecordSuccess(seedKey)
+			}
 			cancel()
 
 			for _, tok := range res.tokens {
