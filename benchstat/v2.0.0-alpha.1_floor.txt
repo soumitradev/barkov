@@ -1,0 +1,66 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkBuild-4                           	       3	 390430476 ns/op	268782226 B/op	 1881860 allocs/op
+BenchmarkBuild-4                           	       4	 333372855 ns/op	268745832 B/op	 1881858 allocs/op
+BenchmarkBuild-4                           	       4	 282445703 ns/op	268677596 B/op	 1881853 allocs/op
+BenchmarkCompress-4                        	       3	 406238517 ns/op	165816768 B/op	 1104870 allocs/op
+BenchmarkCompress-4                        	       3	 382152822 ns/op	165816762 B/op	 1104870 allocs/op
+BenchmarkCompress-4                        	       3	 386304096 ns/op	165816768 B/op	 1104870 allocs/op
+BenchmarkConstructState-4                  	39057285	        35.58 ns/op	      48 B/op	       1 allocs/op
+BenchmarkConstructState-4                  	37701703	        35.05 ns/op	      48 B/op	       1 allocs/op
+BenchmarkConstructState-4                  	38908993	        36.88 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDeconstructState-4                	27799252	        52.43 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDeconstructState-4                	28175758	        54.52 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDeconstructState-4                	26898764	        52.08 ns/op	      64 B/op	       1 allocs/op
+BenchmarkChooseToken-4                     	100000000	        11.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkChooseToken-4                     	100000000	        11.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkChooseToken-4                     	100000000	        11.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMoveUncompressed-4                	220937642	         5.378 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMoveUncompressed-4                	227128502	         5.312 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMoveUncompressed-4                	223369428	         5.366 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMoveCompressed-4                  	227518455	         5.342 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMoveCompressed-4                  	220413916	         5.371 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMoveCompressed-4                  	227970327	         5.299 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGenUncompressed-4                 	  135202	      9109 ns/op	    5618 B/op	      50 allocs/op
+BenchmarkGenUncompressed-4                 	  140935	      8633 ns/op	    5604 B/op	      50 allocs/op
+BenchmarkGenUncompressed-4                 	  141699	      8382 ns/op	    5631 B/op	      50 allocs/op
+BenchmarkGenCompressed-4                   	  238617	      4553 ns/op	    1649 B/op	      23 allocs/op
+BenchmarkGenCompressed-4                   	  236564	      4591 ns/op	    1648 B/op	      23 allocs/op
+BenchmarkGenCompressed-4                   	  239611	      4606 ns/op	    1649 B/op	      23 allocs/op
+BenchmarkGenPruned-4                       	  398254	      2533 ns/op	     925 B/op	      13 allocs/op
+BenchmarkGenPruned-4                       	  393142	      2929 ns/op	     925 B/op	      13 allocs/op
+BenchmarkGenPruned-4                       	  340237	      3178 ns/op	     925 B/op	      13 allocs/op
+BenchmarkGenThreaded-4                     	    2248	    708795 ns/op	  500518 B/op	    7560 allocs/op
+BenchmarkGenThreaded-4                     	    1698	    916373 ns/op	  490769 B/op	    7413 allocs/op
+BenchmarkGenThreaded-4                     	    1452	   1031031 ns/op	  504607 B/op	    7623 allocs/op
+BenchmarkGenWithStart-4                    	  184424	      6233 ns/op	    1649 B/op	      23 allocs/op
+BenchmarkGenWithStart-4                    	  229786	      4774 ns/op	    1649 B/op	      23 allocs/op
+BenchmarkGenWithStart-4                    	  249297	      4806 ns/op	    1649 B/op	      23 allocs/op
+BenchmarkGenPrunedWithStart-4              	  466840	      2551 ns/op	     925 B/op	      13 allocs/op
+BenchmarkGenPrunedWithStart-4              	  407436	      2651 ns/op	     925 B/op	      13 allocs/op
+BenchmarkGenPrunedWithStart-4              	  379275	      3170 ns/op	     925 B/op	      13 allocs/op
+BenchmarkGenThreadedWithStart-4            	    1783	    789902 ns/op	  511132 B/op	    7721 allocs/op
+BenchmarkGenThreadedWithStart-4            	    2209	    778825 ns/op	  497870 B/op	    7521 allocs/op
+BenchmarkGenThreadedWithStart-4            	    1744	    786205 ns/op	  502027 B/op	    7584 allocs/op
+BenchmarkValidatorCall-4                   	18255830	        86.19 ns/op	      96 B/op	       1 allocs/op
+BenchmarkValidatorCall-4                   	19653355	        76.59 ns/op	      96 B/op	       1 allocs/op
+BenchmarkValidatorCall-4                   	20634656	        72.37 ns/op	      96 B/op	       1 allocs/op
+BenchmarkGenGenericString-4                	  214496	      5408 ns/op	    2646 B/op	      26 allocs/op
+BenchmarkGenGenericString-4                	  179856	      5806 ns/op	    2645 B/op	      26 allocs/op
+BenchmarkGenGenericString-4                	  212641	      5781 ns/op	    2645 B/op	      26 allocs/op
+BenchmarkGenGenericStringIter-4            	  193308	      6521 ns/op	    2557 B/op	      24 allocs/op
+BenchmarkGenGenericStringIter-4            	  249589	      5174 ns/op	    2558 B/op	      24 allocs/op
+BenchmarkGenGenericStringIter-4            	  276514	      5159 ns/op	    2558 B/op	      24 allocs/op
+BenchmarkGenGenericStringWithValidator-4   	  312247	      3559 ns/op	    2257 B/op	      22 allocs/op
+BenchmarkGenGenericStringWithValidator-4   	  278370	      3788 ns/op	    2256 B/op	      22 allocs/op
+BenchmarkGenGenericStringWithValidator-4   	  256831	      3895 ns/op	    2257 B/op	      22 allocs/op
+BenchmarkGenGenericStringThreaded-4        	   10000	    176427 ns/op	  321483 B/op	    1837 allocs/op
+BenchmarkGenGenericStringThreaded-4        	   10000	    200256 ns/op	  321855 B/op	    1844 allocs/op
+BenchmarkGenGenericStringThreaded-4        	    9526	    166613 ns/op	  321201 B/op	    1832 allocs/op
+BenchmarkGenGenericStringWithSeed-4        	  212025	      5480 ns/op	    2694 B/op	      27 allocs/op
+BenchmarkGenGenericStringWithSeed-4        	  234073	      5260 ns/op	    2695 B/op	      27 allocs/op
+BenchmarkGenGenericStringWithSeed-4        	  188988	      5736 ns/op	    2694 B/op	      27 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	93.268s
