@@ -150,3 +150,75 @@ func chooseToken32(cumDist []uint32) int {
 		return cumDist[i] > choiceNum
 	})
 }
+
+// ChoicesIndex points into the flat Choices/CumDist arrays.
+type ChoicesIndex struct {
+	Offset uint32
+	Count  uint16
+}
+
+// GenericCompressedChain uses a struct-of-arrays layout for cache efficiency.
+// Will be renamed to CompressedChain in Phase C.
+type GenericCompressedChain[T comparable] struct {
+	Model     map[string]ChoicesIndex
+	Choices   []T
+	CumDist   []uint32
+	stateSize int
+	sentinels Sentinels[T]
+	encoder   StateEncoder[T]
+}
+
+// Compile-time check that GenericCompressedChain implements GenericGenerativeChain.
+var _ GenericGenerativeChain[string] = (*GenericCompressedChain[string])(nil)
+
+// Compress converts the chain to SoA layout for better cache performance.
+func (c *GenericChain[T]) Compress() *GenericCompressedChain[T] {
+	totalEntries := 0
+	for _, choices := range c.Model {
+		totalEntries += len(choices)
+	}
+
+	cc := &GenericCompressedChain[T]{
+		stateSize: c.stateSize,
+		sentinels: c.sentinels,
+		encoder:   c.encoder,
+		Model:     make(map[string]ChoicesIndex, len(c.Model)),
+		Choices:   make([]T, 0, totalEntries),
+		CumDist:   make([]uint32, 0, totalEntries),
+	}
+
+	for state, choices := range c.Model {
+		offset := uint32(len(cc.Choices))
+		keys, cumDist := calculateCumDistGeneric(choices)
+		cc.Choices = append(cc.Choices, keys...)
+		cc.CumDist = append(cc.CumDist, cumDist...)
+		cc.Model[state] = ChoicesIndex{
+			Offset: offset,
+			Count:  uint16(len(keys)),
+		}
+	}
+	return cc
+}
+
+// Implements GenericGenerativeChain[T].
+func (cc *GenericCompressedChain[T]) StateSize() int           { return cc.stateSize }
+func (cc *GenericCompressedChain[T]) MaxOverlap() int          { return cc.stateSize + 2 }
+func (cc *GenericCompressedChain[T]) Sentinels() Sentinels[T]  { return cc.sentinels }
+func (cc *GenericCompressedChain[T]) Encoder() StateEncoder[T] { return cc.encoder }
+
+// Move transitions from a state to a randomly chosen next token.
+func (cc *GenericCompressedChain[T]) Move(state string) (T, error) {
+	idx, ok := cc.Model[state]
+	if !ok {
+		var zero T
+		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
+	}
+	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
+	return choices[chooseToken32(cumDist)], nil
+}
+
+// MoveTokens is a convenience wrapper that encodes the state for the caller.
+func (cc *GenericCompressedChain[T]) MoveTokens(tokens []T) (T, error) {
+	return cc.Move(cc.encoder.Encode(tokens))
+}

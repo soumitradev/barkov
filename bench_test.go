@@ -2,6 +2,7 @@ package barkov
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -185,5 +186,66 @@ func BenchmarkValidatorCall(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		testValidator(gram)
+	}
+}
+
+// --- Generic API benchmarks (Phase B) ---
+
+var testGenericChain *GenericChain[string]
+var testGenericCompressed *GenericCompressedChain[string]
+var testGenericSeedTokens []string
+
+func init() {
+	cfg := ChainConfig[string]{
+		StateSize: 4,
+		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
+		Encoder:   SepEncoder{Sep: SEP},
+	}
+	testGenericChain = NewGenericChain(cfg).BuildRaw(testCorpus)
+	testGenericCompressed = testGenericChain.Compress()
+
+	// Convert seed state to tokens
+	testGenericSeedTokens = DeconstructState(testSeedState)
+}
+
+func BenchmarkGenGenericString(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		GenGeneric(ctx, testGenericCompressed) //nolint
+	}
+}
+
+func BenchmarkGenGenericStringIter(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		var out []string
+		for tok, err := range GenIterGeneric(ctx, testGenericCompressed) {
+			if err != nil {
+				break
+			}
+			out = append(out, tok)
+		}
+		_ = out
+	}
+}
+
+func BenchmarkGenGenericStringWithValidator(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		GenGeneric(ctx, testGenericCompressed, WithGenericValidator(testValidator)) //nolint
+	}
+}
+
+func BenchmarkGenGenericStringThreaded(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		GenGeneric(ctx, testGenericCompressed, WithGenericValidator(testValidator), WithGenericThreaded[string]()) //nolint
+	}
+}
+
+func BenchmarkGenGenericStringWithSeed(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		GenGeneric(ctx, testGenericCompressed, WithGenericSeed(testGenericSeedTokens)) //nolint
 	}
 }
