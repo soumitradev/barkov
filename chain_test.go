@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-func TestGenericChainBuildRaw(t *testing.T) {
+func TestChainBuildRaw(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 
 	corpus := [][]string{
 		{"the", "quick", "brown", "fox"},
@@ -38,13 +38,13 @@ func TestGenericChainBuildRaw(t *testing.T) {
 	}
 }
 
-func TestGenericChainMove(t *testing.T) {
+func TestChainMove(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{{"a", "b", "c"}}
 	chain.BuildRaw(corpus)
 
@@ -72,13 +72,13 @@ func TestGenericChainMove(t *testing.T) {
 	}
 }
 
-func TestGenericChainMoveTokens(t *testing.T) {
+func TestChainMoveTokens(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{{"a", "b", "c"}}
 	chain.BuildRaw(corpus)
 
@@ -92,14 +92,14 @@ func TestGenericChainMoveTokens(t *testing.T) {
 	}
 }
 
-func TestGenericChainWithIntTokens(t *testing.T) {
+func TestChainWithIntTokens(t *testing.T) {
 	// Test that the generic chain works with non-string token types
 	cfg := ChainConfig[int]{
 		StateSize: 2,
 		Sentinels: Sentinels[int]{Begin: -1, End: -2},
 		Encoder:   intEncoder{},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 
 	corpus := [][]int{
 		{1, 2, 3},

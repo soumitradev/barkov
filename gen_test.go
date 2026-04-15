@@ -7,13 +7,13 @@ import (
 	"time"
 )
 
-func TestGenGenericSingleThreaded(t *testing.T) {
+func TestGenSingleThreaded(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{
 		{"a", "b", "c"},
 		{"a", "b", "d"},
@@ -22,7 +22,7 @@ func TestGenGenericSingleThreaded(t *testing.T) {
 	chain.BuildRaw(corpus)
 
 	ctx := context.Background()
-	result, err := GenGeneric(ctx, chain)
+	result, err := Gen(ctx, chain)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,20 +37,20 @@ func TestGenGenericSingleThreaded(t *testing.T) {
 	}
 }
 
-func TestGenGenericWithSeed(t *testing.T) {
+func TestGenWithSeed(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{
 		{"a", "b", "c"},
 	}
 	chain.BuildRaw(corpus)
 
 	ctx := context.Background()
-	result, err := GenGeneric(ctx, chain, WithGenericSeed([]string{"a", "b"}))
+	result, err := Gen(ctx, chain, WithSeed([]string{"a", "b"}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,13 +64,13 @@ func TestGenGenericWithSeed(t *testing.T) {
 	}
 }
 
-func TestGenGenericWithValidator(t *testing.T) {
+func TestGenWithValidator(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{
 		{"a", "b", "c", "d"},
 	}
@@ -87,7 +87,7 @@ func TestGenGenericWithValidator(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := GenGeneric(ctx, chain, WithGenericValidator(validator))
+	_, err := Gen(ctx, chain, WithValidator(validator))
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -96,13 +96,13 @@ func TestGenGenericWithValidator(t *testing.T) {
 	}
 }
 
-func TestGenGenericContextCancellation(t *testing.T) {
+func TestGenContextCancellation(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{
 		{"a", "b", "c", "d", "e", "f", "g"},
 	}
@@ -112,7 +112,7 @@ func TestGenGenericContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel before starting
 
-	_, err := GenGeneric(ctx, chain)
+	_, err := Gen(ctx, chain)
 	if err == nil {
 		t.Fatal("expected context error")
 	}
@@ -121,13 +121,13 @@ func TestGenGenericContextCancellation(t *testing.T) {
 	}
 }
 
-func TestGenIterGenericEarlyBreak(t *testing.T) {
+func TestGenIterEarlyBreak(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{
 		{"a", "b", "c", "d", "e"},
 	}
@@ -135,7 +135,7 @@ func TestGenIterGenericEarlyBreak(t *testing.T) {
 
 	ctx := context.Background()
 	count := 0
-	for tok, err := range GenIterGeneric(ctx, chain) {
+	for tok, err := range GenIter(ctx, chain) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -151,13 +151,13 @@ func TestGenIterGenericEarlyBreak(t *testing.T) {
 	}
 }
 
-func TestGenGenericThreaded(t *testing.T) {
+func TestGenThreaded(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]string{
 		{"the", "quick", "brown", "fox"},
 		{"the", "lazy", "dog"},
@@ -168,7 +168,7 @@ func TestGenGenericThreaded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := GenGeneric(ctx, chain, WithGenericThreaded[string]())
+	result, err := Gen(ctx, chain, WithThreaded[string]())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,18 +178,18 @@ func TestGenGenericThreaded(t *testing.T) {
 	}
 }
 
-func TestGenGenericStateNotFound(t *testing.T) {
+func TestGenStateNotFound(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	// Empty corpus
 	chain.BuildRaw([][]string{})
 
 	ctx := context.Background()
-	_, err := GenGeneric(ctx, chain)
+	_, err := Gen(ctx, chain)
 	if err == nil {
 		t.Fatal("expected error for empty model")
 	}
@@ -198,13 +198,13 @@ func TestGenGenericStateNotFound(t *testing.T) {
 	}
 }
 
-func TestGenGenericWithIntTokens(t *testing.T) {
+func TestGenWithIntTokens(t *testing.T) {
 	cfg := ChainConfig[int]{
 		StateSize: 2,
 		Sentinels: Sentinels[int]{Begin: -1, End: -2},
 		Encoder:   intEncoder{},
 	}
-	chain := NewGenericChain(cfg)
+	chain := NewChain(cfg)
 	corpus := [][]int{
 		{1, 2, 3},
 		{1, 2, 4},
@@ -212,7 +212,7 @@ func TestGenGenericWithIntTokens(t *testing.T) {
 	chain.BuildRaw(corpus)
 
 	ctx := context.Background()
-	result, err := GenGeneric(ctx, chain)
+	result, err := Gen(ctx, chain)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

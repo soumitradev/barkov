@@ -7,17 +7,15 @@ import (
 	"sync"
 )
 
-// GenIterGeneric streams tokens from a generation attempt as an iter.Seq2.
+// GenIter streams tokens from a generation attempt as an iter.Seq2.
 // The second return is an error; on the first non-nil error the iterator
 // stops yielding. ctx cancellation is checked between tokens.
-//
-// Will be renamed to GenIter in Phase C.
-func GenIterGeneric[T comparable](
+func GenIter[T comparable](
 	ctx context.Context,
-	chain GenericGenerativeChain[T],
-	opts ...GenericGenOption[T],
+	chain GenerativeChain[T],
+	opts ...GenOption[T],
 ) iter.Seq2[T, error] {
-	cfg := &genericGenConfig[T]{}
+	cfg := &genConfig[T]{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -27,16 +25,14 @@ func GenIterGeneric[T comparable](
 	return genIterSingle(ctx, chain, cfg)
 }
 
-// GenGeneric collects the iterator into a slice.
-//
-// Will be renamed to Gen in Phase C.
-func GenGeneric[T comparable](
+// Gen collects the iterator into a slice.
+func Gen[T comparable](
 	ctx context.Context,
-	chain GenericGenerativeChain[T],
-	opts ...GenericGenOption[T],
+	chain GenerativeChain[T],
+	opts ...GenOption[T],
 ) ([]T, error) {
 	var out []T
-	for tok, err := range GenIterGeneric(ctx, chain, opts...) {
+	for tok, err := range GenIter(ctx, chain, opts...) {
 		if err != nil {
 			return nil, err
 		}
@@ -47,8 +43,8 @@ func GenGeneric[T comparable](
 
 func genIterSingle[T comparable](
 	ctx context.Context,
-	chain GenericGenerativeChain[T],
-	cfg *genericGenConfig[T],
+	chain GenerativeChain[T],
+	cfg *genConfig[T],
 ) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		stateSize := chain.StateSize()
@@ -124,8 +120,8 @@ func genIterSingle[T comparable](
 // replayed through the iterator.
 func genIterThreaded[T comparable](
 	ctx context.Context,
-	chain GenericGenerativeChain[T],
-	cfg *genericGenConfig[T],
+	chain GenerativeChain[T],
+	cfg *genConfig[T],
 ) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		type result struct {
@@ -147,7 +143,7 @@ func genIterThreaded[T comparable](
 				defer wg.Done()
 
 				// Build a single-threaded config for this worker
-				workerCfg := &genericGenConfig[T]{
+				workerCfg := &genConfig[T]{
 					seed:      cfg.seed,
 					validator: cfg.validator,
 					pool:      cfg.pool,
