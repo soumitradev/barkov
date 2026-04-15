@@ -2,6 +2,7 @@ goos: linux
 goarch: amd64
 pkg: github.com/soumitradev/barkov/v2
 cpu: AMD Ryzen 9 7900 12-Core Processor
+# string API (legacy Chain)
 BenchmarkEndToEnd-24    	       2	 879575114 ns/op	434536928 B/op	 2986748 allocs/op
 BenchmarkEndToEnd-24    	       2	 684334216 ns/op	434455232 B/op	 2986745 allocs/op
 BenchmarkEndToEnd-24    	       2	 685780268 ns/op	434509760 B/op	 2986749 allocs/op
@@ -12,5 +13,16 @@ BenchmarkEndToEnd-24    	       2	 758029900 ns/op	434591664 B/op	 2986755 alloc
 BenchmarkEndToEnd-24    	       2	 685158524 ns/op	434537136 B/op	 2986751 allocs/op
 BenchmarkEndToEnd-24    	       2	 666517698 ns/op	434618488 B/op	 2986751 allocs/op
 BenchmarkEndToEnd-24    	       2	 723621516 ns/op	434509696 B/op	 2986747 allocs/op
+# generic API (GenericChain[string] with SepEncoder)
+BenchmarkEndToEndGeneric-24    	       2	 728245694 ns/op	275868432 B/op	 1786302 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 528636247 ns/op	275814080 B/op	 1786301 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 552709584 ns/op	275786872 B/op	 1786301 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 614237306 ns/op	275841464 B/op	 1786305 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 622044120 ns/op	275841448 B/op	 1786304 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 608444260 ns/op	275869136 B/op	 1786311 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 590784592 ns/op	275813880 B/op	 1786299 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 572574635 ns/op	275786544 B/op	 1786295 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 627377414 ns/op	275814144 B/op	 1786302 allocs/op
+BenchmarkEndToEndGeneric-24    	       2	 593978570 ns/op	275895960 B/op	 1786306 allocs/op
 PASS
-ok  	github.com/soumitradev/barkov/v2	17.485s
+ok  	github.com/soumitradev/barkov/v2	33.038s

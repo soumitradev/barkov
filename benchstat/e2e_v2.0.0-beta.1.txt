@@ -1,0 +1,30 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor
+# Chain[string] with SepEncoder
+BenchmarkEndToEnd-24    	       2	 795402708 ns/op	275841328 B/op	 1786301 allocs/op
+BenchmarkEndToEnd-24    	       2	 602499271 ns/op	275868696 B/op	 1786305 allocs/op
+BenchmarkEndToEnd-24    	       2	 512925837 ns/op	275844032 B/op	 1786305 allocs/op
+BenchmarkEndToEnd-24    	       2	 556048666 ns/op	275814040 B/op	 1786299 allocs/op
+BenchmarkEndToEnd-24    	       2	 518084838 ns/op	275868768 B/op	 1786305 allocs/op
+BenchmarkEndToEnd-24    	       2	 512350932 ns/op	275813864 B/op	 1786298 allocs/op
+BenchmarkEndToEnd-24    	       2	 608453748 ns/op	275868784 B/op	 1786306 allocs/op
+BenchmarkEndToEnd-24    	       2	 539450850 ns/op	275813816 B/op	 1786297 allocs/op
+BenchmarkEndToEnd-24    	       2	 574679271 ns/op	275896024 B/op	 1786308 allocs/op
+BenchmarkEndToEnd-24    	       2	 540108567 ns/op	275814104 B/op	 1786301 allocs/op
+
+pkg: github.com/soumitradev/barkov/v2/interned
+# Chain[TokenID] with PackedEncoder (interned subpackage)
+BenchmarkEndToEnd-24    	       2	 560136434 ns/op	183875920 B/op	 1833422 allocs/op
+BenchmarkEndToEnd-24    	       2	 522656654 ns/op	183891136 B/op	 1833423 allocs/op
+BenchmarkEndToEnd-24    	       2	 511537402 ns/op	183983832 B/op	 1833438 allocs/op
+BenchmarkEndToEnd-24    	       3	 494324489 ns/op	183961642 B/op	 1833431 allocs/op
+BenchmarkEndToEnd-24    	       3	 493184501 ns/op	183876058 B/op	 1833420 allocs/op
+BenchmarkEndToEnd-24    	       3	 456883425 ns/op	183906288 B/op	 1833427 allocs/op
+BenchmarkEndToEnd-24    	       2	 500369303 ns/op	183992072 B/op	 1833435 allocs/op
+BenchmarkEndToEnd-24    	       3	 496131251 ns/op	183845162 B/op	 1833414 allocs/op
+BenchmarkEndToEnd-24    	       3	 482200697 ns/op	183954501 B/op	 1833426 allocs/op
+BenchmarkEndToEnd-24    	       2	 531018942 ns/op	184000424 B/op	 1833432 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2/interned	12.635s
