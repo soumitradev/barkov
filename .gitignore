@@ -1,0 +1,11 @@
+# Planning docs (kept locally, not part of the library)
+COMPAT_PLAN.md
+PERF_PLAN.md
+MIGRATION.md
+
+# Benchmark audit snapshots
+benchstat/public_api_*.txt
+
+# Build artifacts and profiling output
+*.test
+*.prof
