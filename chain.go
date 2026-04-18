@@ -279,7 +279,12 @@ type CompressedChain[T comparable] struct {
 	stateSize int
 	sentinels Sentinels[T]
 	encoder   StateEncoder[T]
+	rng       *rand.Rand // nil = use package math/rand/v2
 }
+
+// SetRNG overrides the random source used by Move. Intended for
+// deterministic benchmarks and tests; not safe for concurrent use.
+func (cc *CompressedChain[T]) SetRNG(r *rand.Rand) { cc.rng = r }
 
 // Compile-time check that CompressedChain implements GenerativeChain.
 var _ GenerativeChain[string] = (*CompressedChain[string])(nil)
@@ -500,7 +505,13 @@ func (cc *CompressedChain[T]) Move(state string) (T, error) {
 	}
 	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
 	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
-	return choices[chooseToken32(cumDist)], nil
+	var choiceNum uint32
+	if cc.rng != nil {
+		choiceNum = cc.rng.Uint32N(cumDist[len(cumDist)-1])
+	} else {
+		choiceNum = rand.Uint32N(cumDist[len(cumDist)-1])
+	}
+	return choices[sort.Search(len(cumDist), func(i int) bool { return cumDist[i] > choiceNum })], nil
 }
 
 // MoveTokens is a convenience wrapper that encodes the state for the caller.

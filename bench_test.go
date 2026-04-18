@@ -3,6 +3,7 @@ package barkov
 import (
 	"bufio"
 	"context"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"testing"
@@ -126,13 +127,17 @@ func BenchmarkGen(b *testing.B) {
 
 // BenchmarkGenHeavy amortises the per-iteration b.Loop overhead across
 // many Gens so per-Move optimisations show up as a measurable signal.
+// The chain is seeded with a deterministic PCG so each iteration does
+// identical work — variance reflects runtime/GC jitter, not RNG draws.
 func BenchmarkGenHeavy(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
-		for range 1000 {
+		testCompressed.SetRNG(rand.New(rand.NewPCG(0xb4, 0xc0)))
+		for range 10000 {
 			Gen(ctx, testCompressed) //nolint
 		}
 	}
+	testCompressed.SetRNG(nil)
 }
 
 func BenchmarkGenIter(b *testing.B) {
