@@ -221,6 +221,31 @@ func (c *Chain[T]) MoveTokens(tokens []T) (T, error) {
 	return c.Move(c.encoder.Encode(tokens))
 }
 
+// Prune drops transitions with count < minCount, then removes any state
+// whose transitions are all pruned. Intended for the BuildRaw → Prune →
+// Compress flow; has no effect when minCount <= 1.
+//
+// On prose corpora, minCount=2 typically halves memory by removing the
+// long tail of singleton transitions (often OCR noise, typos, hapax
+// legomena) without materially changing generation quality.
+func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
+	if minCount <= 1 {
+		return c
+	}
+	for state, choices := range c.Model {
+		for token, count := range choices {
+			if count < minCount {
+				delete(choices, token)
+			}
+		}
+		if len(choices) == 0 {
+			delete(c.Model, state)
+		}
+	}
+	c.precomputeBeginState()
+	return c
+}
+
 func calculateCumDist[T comparable](next map[T]uint32) ([]T, []uint32) {
 	keys := make([]T, 0, len(next))
 	cumDist := make([]uint32, 0, len(next))

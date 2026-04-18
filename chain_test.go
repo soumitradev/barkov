@@ -248,3 +248,42 @@ func splitString(s string, sep byte) []string {
 	result = append(result, s[start:])
 	return result
 }
+
+func TestPrune(t *testing.T) {
+	corpus := [][]string{
+		{"a", "b", "c", "common", "x"},
+		{"a", "b", "c", "common", "y"},
+		{"a", "b", "c", "common", "z"},
+		{"a", "b", "c", "rare", "q"},
+	}
+	chain := InitChain(3).Build(corpus)
+
+	stateABC := SepEncoder{Sep: SEP}.Encode([]string{"a", "b", "c"})
+	if chain.Model[stateABC]["common"] != 3 || chain.Model[stateABC]["rare"] != 1 {
+		t.Fatalf("unexpected pre-prune counts: %v", chain.Model[stateABC])
+	}
+
+	chain.Prune(2)
+
+	if _, ok := chain.Model[stateABC]["rare"]; ok {
+		t.Errorf("rare transition should be pruned")
+	}
+	if chain.Model[stateABC]["common"] != 3 {
+		t.Errorf("common transition should survive, got %d", chain.Model[stateABC]["common"])
+	}
+
+	stateRareQ := SepEncoder{Sep: SEP}.Encode([]string{"b", "c", "rare"})
+	if _, ok := chain.Model[stateRareQ]; ok {
+		t.Errorf("state with all-pruned transitions should be removed")
+	}
+}
+
+func TestPruneNoop(t *testing.T) {
+	corpus := [][]string{{"a", "b", "c", "d"}}
+	chain := InitChain(2).Build(corpus)
+	sizeBefore := len(chain.Model)
+	chain.Prune(1)
+	if len(chain.Model) != sizeBefore {
+		t.Errorf("Prune(1) should be a no-op, size changed %d -> %d", sizeBefore, len(chain.Model))
+	}
+}
