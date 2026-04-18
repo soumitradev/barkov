@@ -80,14 +80,16 @@ func main() {
 }
 
 // -----------------------------------------------------------------------
-// If your stateSize is exactly 4, swap the build line for
-// interned.BuildCompressedIndexed(encoded). On large corpora it's
-// roughly twice as fast than the generic build path (see
-// benchstat/e2e_v2.0.0-beta.4.txt, the interned/plain-24 row). The
-// returned chain satisfies GenerativeChain[TokenID] so everything
+// For stateSizes 2–8, swap the build line for
+// interned.BuildCompressedIndexedN(encoded) (N matching your stateSize,
+// e.g. BuildCompressedIndexed5). BuildCompressedIndexed without a
+// suffix is shorthand for N=4. On large corpora these indexed chains
+// run roughly 1.7x faster and use about 35% less memory than the
+// generic build path (see benchstat/pipeline_simple_vs_maxopt.txt).
+// The returned chain satisfies GenerativeChain[TokenID] so everything
 // downstream keeps working.
 //
-//	// stateSize=4 only:
-//	indexed := interned.BuildCompressedIndexed(encoded)
+//	indexed := interned.BuildCompressedIndexed(encoded) // N=4
+//	// indexed := interned.BuildCompressedIndexed5(encoded) // N=5
 //	barkov.Gen(ctx, indexed, barkov.WithValidator(validator))
 // -----------------------------------------------------------------------

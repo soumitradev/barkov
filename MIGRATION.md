@@ -159,7 +159,7 @@ import "github.com/soumitradev/barkov/v2/interned"
 
 vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-compressed := interned.BuildCompressedIndexed(encoded) // stateSize=4 specialisation
+compressed := interned.BuildCompressedIndexed(encoded) // stateSize=4; use BuildCompressedIndexedN for N∈2..8
 ```
 
 ## Stuck detector moved to a subpackage
