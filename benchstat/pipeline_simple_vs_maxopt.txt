@@ -1,0 +1,48 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       3	 408719143 ns/op	188292813 B/op	    5818 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 270458006 ns/op	188292624 B/op	    5815 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 251592038 ns/op	188292832 B/op	    5819 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 275348940 ns/op	188292668 B/op	    5816 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 301473730 ns/op	188292844 B/op	    5818 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       5	 207063739 ns/op	145961632 B/op	   58154 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       7	 176804913 ns/op	146011609 B/op	   58160 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       6	 207246241 ns/op	145999880 B/op	   58158 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       7	 161242110 ns/op	146097344 B/op	   58164 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       5	 211003502 ns/op	146005273 B/op	   58155 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	12.376s
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 307900591 ns/op	188292784 B/op	    5817 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 320739651 ns/op	188293064 B/op	    5821 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 279185523 ns/op	188292864 B/op	    5819 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 266409001 ns/op	188292796 B/op	    5818 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       3	 390433654 ns/op	188293080 B/op	    5820 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       4	 273930031 ns/op	146013496 B/op	   58157 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       7	 202756376 ns/op	145956964 B/op	   58154 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       4	 286651262 ns/op	146109116 B/op	   58167 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       5	 208236789 ns/op	146016275 B/op	   58160 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       5	 222454992 ns/op	146081766 B/op	   58164 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	13.237s
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       2	 511688532 ns/op	188292720 B/op	    5815 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       3	 387061138 ns/op	188292450 B/op	    5813 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 312231608 ns/op	188292620 B/op	    5814 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       3	 369625204 ns/op	188292536 B/op	    5814 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/simple-24         	       4	 252140795 ns/op	188292460 B/op	    5813 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       5	 232298169 ns/op	146092627 B/op	   58162 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       4	 256714406 ns/op	146040816 B/op	   58161 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       7	 157373050 ns/op	146136301 B/op	   58165 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       5	 236406411 ns/op	146038035 B/op	   58158 allocs/op
+BenchmarkPipelineSimpleVsMaxOpt/maxopt-24         	       6	 170892739 ns/op	146027218 B/op	   58161 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	12.108s

@@ -119,3 +119,58 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkPipelineSimpleVsMaxOpt compares the plain string pipeline
+// against the fully-optimized pipeline at stateSize=4, no validator on
+// either side, so the delta isolates the cost of the optimization levers
+// (interning, IndexedCompressedChain) rather than mixing in validator work.
+// Numbers from this benchmark back the speedup claim in the README.
+func BenchmarkPipelineSimpleVsMaxOpt(b *testing.B) {
+	ctx := context.Background()
+
+	b.Run("simple", func(b *testing.B) {
+		for b.Loop() {
+			compressed := barkov.InitChain(4).BuildCompressed(e2eCorpus)
+			barkov.Gen(ctx, compressed) //nolint
+		}
+	})
+
+	b.Run("maxopt", func(b *testing.B) {
+		for b.Loop() {
+			vocab := interned.NewVocabulary()
+			encoded := vocab.InternCorpus(e2eCorpus)
+			compressed := interned.BuildCompressedIndexed(encoded)
+			barkov.Gen(ctx, compressed) //nolint
+		}
+	})
+}
+
+// BenchmarkThreadedVsSequential isolates WithThreaded's effect at
+// stateSize=4 with the xxh3 anti-verbatim validator (the case threading
+// is meant to help, since rejected candidates force retries). Both
+// variants share the same validated Gen config; only the fan-out differs.
+func BenchmarkThreadedVsSequential(b *testing.B) {
+	ctx := context.Background()
+	packedEnc := interned.PackedEncoder{}
+	const n = 6
+
+	vocab := interned.NewVocabulary()
+	encoded := vocab.InternCorpus(e2eCorpus)
+	compressed := interned.BuildCompressedIndexed(encoded)
+	v := nhash.New(encoded, n, packedEnc, xxh3.XXH3{}).Validator()
+
+	b.Run("sequential", func(b *testing.B) {
+		for b.Loop() {
+			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
+		}
+	})
+
+	b.Run("threaded", func(b *testing.B) {
+		for b.Loop() {
+			barkov.Gen(ctx, compressed,
+				barkov.WithValidator(v),
+				barkov.WithThreaded[interned.TokenID](),
+			) //nolint
+		}
+	})
+}

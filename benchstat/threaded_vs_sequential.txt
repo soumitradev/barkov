@@ -1,0 +1,16 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkThreadedVsSequential/sequential-24         	  412539	      3008 ns/op	    1052 B/op	      20 allocs/op
+BenchmarkThreadedVsSequential/sequential-24         	  392557	      2632 ns/op	    1052 B/op	      20 allocs/op
+BenchmarkThreadedVsSequential/sequential-24         	  490206	      2278 ns/op	    1051 B/op	      20 allocs/op
+BenchmarkThreadedVsSequential/sequential-24         	  654039	      2142 ns/op	    1052 B/op	      20 allocs/op
+BenchmarkThreadedVsSequential/sequential-24         	  624204	      1838 ns/op	    1051 B/op	      20 allocs/op
+BenchmarkThreadedVsSequential/threaded-24           	    7587	    163315 ns/op	  169929 B/op	    2659 allocs/op
+BenchmarkThreadedVsSequential/threaded-24           	    6990	    167069 ns/op	  162248 B/op	    2477 allocs/op
+BenchmarkThreadedVsSequential/threaded-24           	    6945	    170310 ns/op	  164432 B/op	    2526 allocs/op
+BenchmarkThreadedVsSequential/threaded-24           	    7557	    162966 ns/op	  167847 B/op	    2612 allocs/op
+BenchmarkThreadedVsSequential/threaded-24           	    6388	    163111 ns/op	  166329 B/op	    2576 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	13.263s
