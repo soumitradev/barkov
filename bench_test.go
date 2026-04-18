@@ -93,6 +93,12 @@ func BenchmarkCompress(b *testing.B) {
 	}
 }
 
+func BenchmarkBuildCompressed(b *testing.B) {
+	for b.Loop() {
+		InitChain(4).BuildCompressed(testCorpus)
+	}
+}
+
 // --- State helpers ---
 
 func BenchmarkConstructState(b *testing.B) {

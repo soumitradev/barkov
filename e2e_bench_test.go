@@ -51,16 +51,14 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 
 	b.Run("string/plain", func(b *testing.B) {
 		for b.Loop() {
-			chain := barkov.InitChain(4).Build(e2eCorpus)
-			compressed := chain.Compress()
+			compressed := barkov.InitChain(4).BuildCompressed(e2eCorpus)
 			barkov.Gen(ctx, compressed) //nolint
 		}
 	})
 
 	b.Run("string/NGramSet", func(b *testing.B) {
 		for b.Loop() {
-			chain := barkov.InitChain(4).Build(e2eCorpus)
-			compressed := chain.Compress()
+			compressed := barkov.InitChain(4).BuildCompressed(e2eCorpus)
 			v := barkov.NewNGramSet(e2eCorpus, n, enc).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -68,8 +66,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 
 	b.Run("string/FNV", func(b *testing.B) {
 		for b.Loop() {
-			chain := barkov.InitChain(4).Build(e2eCorpus)
-			compressed := chain.Compress()
+			compressed := barkov.InitChain(4).BuildCompressed(e2eCorpus)
 			v := nhash.New(e2eCorpus, n, enc, fnv.FNV{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -77,8 +74,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 
 	b.Run("string/XXH3", func(b *testing.B) {
 		for b.Loop() {
-			chain := barkov.InitChain(4).Build(e2eCorpus)
-			compressed := chain.Compress()
+			compressed := barkov.InitChain(4).BuildCompressed(e2eCorpus)
 			v := nhash.New(e2eCorpus, n, enc, xxh3.XXH3{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -88,8 +84,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			chain, vocab := interned.InitChain(4)
 			encoded := vocab.InternCorpus(e2eCorpus)
-			chain.BuildRaw(encoded)
-			compressed := chain.Compress()
+			compressed := chain.BuildCompressed(encoded)
 			barkov.Gen(ctx, compressed) //nolint
 		}
 	})
@@ -98,8 +93,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			chain, vocab := interned.InitChain(4)
 			encoded := vocab.InternCorpus(e2eCorpus)
-			chain.BuildRaw(encoded)
-			compressed := chain.Compress()
+			compressed := chain.BuildCompressed(encoded)
 			v := barkov.NewNGramSet(e2eCorpusInterned, n, packedEnc).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -109,8 +103,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			chain, vocab := interned.InitChain(4)
 			encoded := vocab.InternCorpus(e2eCorpus)
-			chain.BuildRaw(encoded)
-			compressed := chain.Compress()
+			compressed := chain.BuildCompressed(encoded)
 			v := nhash.New(e2eCorpusInterned, n, packedEnc, fnv.FNV{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -120,8 +113,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			chain, vocab := interned.InitChain(4)
 			encoded := vocab.InternCorpus(e2eCorpus)
-			chain.BuildRaw(encoded)
-			compressed := chain.Compress()
+			compressed := chain.BuildCompressed(encoded)
 			v := nhash.New(e2eCorpusInterned, n, packedEnc, xxh3.XXH3{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
