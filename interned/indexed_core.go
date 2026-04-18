@@ -39,11 +39,13 @@ func (c *indexedCore[K]) MaxOverlap() int                       { return c.state
 func (c *indexedCore[K]) Sentinels() barkov.Sentinels[TokenID]  { return c.sentinels }
 func (c *indexedCore[K]) Encoder() barkov.StateEncoder[TokenID] { return c.encoder }
 
-// pickFollow resolves a ChoicesIndex to a TokenID. Fanout-1 states skip
-// the RNG / slice / sort.Search path entirely.
+// pickFollow resolves a ChoicesIndex to a TokenID. Fanout-1 states pack
+// the follower TokenID into Offset at build time, so the hot path returns
+// without touching Choices[] — one fewer cache miss per Count==1 lookup,
+// which dominates most corpora.
 func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
 	if idx.Count == 1 {
-		return c.Choices[idx.Offset]
+		return TokenID(idx.Offset)
 	}
 	cumDist := c.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
 	choices := c.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
@@ -211,14 +213,25 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			}
 		}
 
-		var total uint32
-		for m := groupStart; m < len(cc.Choices); m++ {
-			total += cc.CumDist[m]
-			cc.CumDist[m] = total
+		count := uint16(len(cc.Choices) - groupStart)
+		var indexOffset uint32
+		if count == 1 {
+			// Fanout-1: pack the follower TokenID into Offset so pickFollow
+			// returns without a Choices[] load. Roll back the unused slot.
+			indexOffset = uint32(cc.Choices[groupStart])
+			cc.Choices = cc.Choices[:groupStart]
+			cc.CumDist = cc.CumDist[:groupStart]
+		} else {
+			var total uint32
+			for m := groupStart; m < len(cc.Choices); m++ {
+				total += cc.CumDist[m]
+				cc.CumDist[m] = total
+			}
+			indexOffset = offset
 		}
 		cc.Model.Put(stateKeys[s], barkov.ChoicesIndex{
-			Offset: offset,
-			Count:  uint16(len(cc.Choices) - groupStart),
+			Offset: indexOffset,
+			Count:  count,
 		})
 	}
 	return cc

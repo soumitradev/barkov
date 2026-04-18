@@ -56,9 +56,23 @@ func checkIndexedEquiv[K comparable](t *testing.T, stateSize int, corpus [][]str
 		}
 		baseChoices := baseline.Choices[baseIdx.Offset : baseIdx.Offset+uint32(baseIdx.Count)]
 		baseCumDist := baseline.CumDist[baseIdx.Offset : baseIdx.Offset+uint32(baseIdx.Count)]
+		baseCounts := cumDistToCounts(baseChoices, baseCumDist)
+		if idxRef.Count == 1 {
+			// Fanout-1: Offset holds the follower TokenID directly. Only
+			// verify the baseline agrees on unique fanout and follower;
+			// observation count is not tracked in the inline layout since
+			// pickFollow returns unconditionally.
+			if len(baseCounts) != 1 {
+				t.Errorf("indexed says fanout=1 but baseline has %d choices", len(baseCounts))
+				continue
+			}
+			if _, ok := baseCounts[TokenID(idxRef.Offset)]; !ok {
+				t.Errorf("inline follower %d not in baseline choices", idxRef.Offset)
+			}
+			continue
+		}
 		idxChoices := indexed.Choices[idxRef.Offset : idxRef.Offset+uint32(idxRef.Count)]
 		idxCumDist := indexed.CumDist[idxRef.Offset : idxRef.Offset+uint32(idxRef.Count)]
-		baseCounts := cumDistToCounts(baseChoices, baseCumDist)
 		idxCounts := cumDistToCounts(idxChoices, idxCumDist)
 		if len(baseCounts) != len(idxCounts) {
 			t.Errorf("choice-count differs: base=%d indexed=%d", len(baseCounts), len(idxCounts))
