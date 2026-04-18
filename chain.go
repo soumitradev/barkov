@@ -510,6 +510,11 @@ func (cc *CompressedChain[T]) Move(state string) (T, error) {
 		var zero T
 		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
 	}
+	// Deterministic-choice fast path: when a state has exactly one follower,
+	// we skip RNG, slice construction, and sort.Search.
+	if idx.Count == 1 {
+		return cc.Choices[idx.Offset], nil
+	}
 	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
 	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
 	var choiceNum uint32
