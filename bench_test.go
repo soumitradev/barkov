@@ -124,6 +124,17 @@ func BenchmarkGen(b *testing.B) {
 	}
 }
 
+// BenchmarkGenHeavy amortises the per-iteration b.Loop overhead across
+// many Gens so per-Move optimisations show up as a measurable signal.
+func BenchmarkGenHeavy(b *testing.B) {
+	ctx := context.Background()
+	for b.Loop() {
+		for range 1000 {
+			Gen(ctx, testCompressed) //nolint
+		}
+	}
+}
+
 func BenchmarkGenIter(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
