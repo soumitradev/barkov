@@ -1,0 +1,46 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkEndToEndAllConfigs/string/plain-24         	       3	 359024621 ns/op	188292914 B/op	    5819 allocs/op
+BenchmarkEndToEndAllConfigs/string/plain-24         	       4	 310935934 ns/op	188292872 B/op	    5818 allocs/op
+BenchmarkEndToEndAllConfigs/string/plain-24         	       4	 358973626 ns/op	188292748 B/op	    5817 allocs/op
+BenchmarkEndToEndAllConfigs/string/plain-24         	       3	 419011823 ns/op	188293160 B/op	    5821 allocs/op
+BenchmarkEndToEndAllConfigs/string/plain-24         	       4	 348987733 ns/op	188292628 B/op	    5815 allocs/op
+BenchmarkEndToEndAllConfigs/string/NGramSet-24      	       3	 468159502 ns/op	239305885 B/op	    7364 allocs/op
+BenchmarkEndToEndAllConfigs/string/NGramSet-24      	       3	 341814154 ns/op	239305970 B/op	    7365 allocs/op
+BenchmarkEndToEndAllConfigs/string/NGramSet-24      	       3	 359250942 ns/op	239305944 B/op	    7365 allocs/op
+BenchmarkEndToEndAllConfigs/string/NGramSet-24      	       3	 379533386 ns/op	239307248 B/op	    7368 allocs/op
+BenchmarkEndToEndAllConfigs/string/NGramSet-24      	       3	 445281798 ns/op	239307280 B/op	    7368 allocs/op
+BenchmarkEndToEndAllConfigs/string/FNV-24           	       3	 441405791 ns/op	202484045 B/op	    7361 allocs/op
+BenchmarkEndToEndAllConfigs/string/FNV-24           	       3	 363766568 ns/op	202484077 B/op	    7361 allocs/op
+BenchmarkEndToEndAllConfigs/string/FNV-24           	       3	 434237509 ns/op	202483821 B/op	    7359 allocs/op
+BenchmarkEndToEndAllConfigs/string/FNV-24           	       4	 323374151 ns/op	202483246 B/op	    7361 allocs/op
+BenchmarkEndToEndAllConfigs/string/FNV-24           	       3	 461929513 ns/op	202482746 B/op	    7358 allocs/op
+BenchmarkEndToEndAllConfigs/string/XXH3-24          	       3	 398546283 ns/op	202484056 B/op	    7361 allocs/op
+BenchmarkEndToEndAllConfigs/string/XXH3-24          	       3	 459214863 ns/op	202484072 B/op	    7361 allocs/op
+BenchmarkEndToEndAllConfigs/string/XXH3-24          	       3	 434030843 ns/op	202482864 B/op	    7360 allocs/op
+BenchmarkEndToEndAllConfigs/string/XXH3-24          	       4	 307081692 ns/op	202483402 B/op	    7362 allocs/op
+BenchmarkEndToEndAllConfigs/string/XXH3-24          	       4	 312405710 ns/op	202483362 B/op	    7362 allocs/op
+BenchmarkEndToEndAllConfigs/interned/plain-24       	       3	 344120340 ns/op	162219570 B/op	   58178 allocs/op
+BenchmarkEndToEndAllConfigs/interned/plain-24       	       3	 346275881 ns/op	162128552 B/op	   58170 allocs/op
+BenchmarkEndToEndAllConfigs/interned/plain-24       	       3	 379322813 ns/op	162092109 B/op	   58165 allocs/op
+BenchmarkEndToEndAllConfigs/interned/plain-24       	       5	 214824239 ns/op	162201310 B/op	   58174 allocs/op
+BenchmarkEndToEndAllConfigs/interned/plain-24       	       6	 241414131 ns/op	162119432 B/op	   58167 allocs/op
+BenchmarkEndToEndAllConfigs/interned/NGramSet-24    	       4	 293460176 ns/op	196011990 B/op	   59717 allocs/op
+BenchmarkEndToEndAllConfigs/interned/NGramSet-24    	       3	 360285285 ns/op	195998061 B/op	   59716 allocs/op
+BenchmarkEndToEndAllConfigs/interned/NGramSet-24    	       4	 253700160 ns/op	196012078 B/op	   59718 allocs/op
+BenchmarkEndToEndAllConfigs/interned/NGramSet-24    	       4	 319351325 ns/op	195902806 B/op	   59709 allocs/op
+BenchmarkEndToEndAllConfigs/interned/NGramSet-24    	       3	 344565485 ns/op	195997922 B/op	   59714 allocs/op
+BenchmarkEndToEndAllConfigs/interned/FNV-24         	       4	 317474522 ns/op	176282778 B/op	   59707 allocs/op
+BenchmarkEndToEndAllConfigs/interned/FNV-24         	       3	 380874496 ns/op	176391968 B/op	   59718 allocs/op
+BenchmarkEndToEndAllConfigs/interned/FNV-24         	       4	 284178482 ns/op	176241024 B/op	   59703 allocs/op
+BenchmarkEndToEndAllConfigs/interned/FNV-24         	       4	 344733769 ns/op	176200168 B/op	   59701 allocs/op
+BenchmarkEndToEndAllConfigs/interned/FNV-24         	       4	 255718930 ns/op	176419562 B/op	   59721 allocs/op
+BenchmarkEndToEndAllConfigs/interned/XXH3-24        	       4	 259951022 ns/op	176336560 B/op	   59710 allocs/op
+BenchmarkEndToEndAllConfigs/interned/XXH3-24        	       4	 283503175 ns/op	176337462 B/op	   59712 allocs/op
+BenchmarkEndToEndAllConfigs/interned/XXH3-24        	       5	 235522881 ns/op	176293188 B/op	   59707 allocs/op
+BenchmarkEndToEndAllConfigs/interned/XXH3-24        	       3	 356456403 ns/op	176373653 B/op	   59716 allocs/op
+BenchmarkEndToEndAllConfigs/interned/XXH3-24        	       4	 307509655 ns/op	176255750 B/op	   59708 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	53.683s
