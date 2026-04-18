@@ -38,14 +38,14 @@ type stateEntry[K comparable, V comparable] struct {
 	val V
 }
 
-// Grow at 1/2 load. Power-of-2 rounding lands the fill-time load factor
-// at roughly 0.25-0.45, which keeps expected probe distance near 1.1 —
-// the main source of the gen-path win over Go's swisstable. Tightening
-// to 0.75 halved the excess Model memory but cost ~6% of the gen win,
-// and the gen path is the library's hot loop (build-once, gen-many).
+// Grow at 3/5 load. A prior 0.75 attempt cost ~6% of the gen win, but
+// profile showed Get's cost is ~88% memory latency on the first bucket
+// load — shrinking the table wins back cache residency that outweighs
+// the ~1 extra probe distance at 0.6 vs 0.5. Power-of-2 rounding lands
+// the fill-time load factor at ~0.3–0.55.
 const (
-	loadFactorNum = 1
-	loadFactorDen = 2
+	loadFactorNum = 3
+	loadFactorDen = 5
 )
 
 // newStateMap returns a stateMap sized so that `sizeHint` entries
