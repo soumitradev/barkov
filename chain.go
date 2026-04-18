@@ -121,7 +121,9 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 		// map using an unsafe string view over that scratch — nothing is
 		// allocated if the state has been seen. Only the first time a
 		// state is observed do we publish the key bytes into the arena.
-		estUnique := totalObs/4 + 64
+		// See BuildCompressed: totalObs/4 undershoots actual unique states by
+		// ~3.3x on typical corpora.
+		estUnique := totalObs + 64
 		arena := newKeyArena(estUnique * c.stateSize * 8)
 		scratch := make([]byte, 0, 256)
 		if len(c.Model) == 0 {
@@ -355,7 +357,12 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 		totalObs += len(run) + 1
 	}
 
-	estUnique := totalObs/4 + 64
+	// Observed on the public corpus: numStates ≈ 0.82 * totalObs (fanout
+	// barely >1), so the old estimate of totalObs/4 undershot by ~3.3x,
+	// forcing the map through several rehashes and the slice through
+	// multiple doublings. Using totalObs as the upper bound wastes ~20% in
+	// slack but eliminates all growth cost.
+	estUnique := totalObs + 64
 	stateIdx := make(map[string]uint32, estUnique)
 	stateKeys := make([]string, 0, estUnique)
 	arena := newKeyArena(estUnique * c.stateSize * 8)
