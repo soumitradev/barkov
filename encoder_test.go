@@ -59,3 +59,36 @@ func TestSepEncoderInjectivity(t *testing.T) {
 		seen[encoded] = tokens
 	}
 }
+
+// TestSepEncoderAppendEquivalence verifies the AppendEncoder fast path
+// produces byte-identical output to Encode for all inputs. This is the
+// contract that BuildRaw relies on.
+func TestSepEncoderAppendEquivalence(t *testing.T) {
+	enc := SepEncoder{Sep: SEP}
+
+	cases := [][]string{
+		nil,
+		{},
+		{""},
+		{"single"},
+		{"a", "b"},
+		{"the", "quick", "brown", "fox"},
+		{"hello world", "foo bar"},
+		{"", "nonempty"},
+		{"nonempty", ""},
+		{"a", "", "b"},
+	}
+
+	for _, tokens := range cases {
+		want := enc.Encode(tokens)
+		got := string(enc.AppendEncoded(nil, tokens))
+		if got != want {
+			t.Errorf("AppendEncoded(nil, %v) = %q; Encode = %q", tokens, got, want)
+		}
+		prefix := []byte("PREFIX:")
+		out := enc.AppendEncoded(prefix, tokens)
+		if string(out) != "PREFIX:"+want {
+			t.Errorf("AppendEncoded(prefix, %v) = %q; want %q", tokens, string(out), "PREFIX:"+want)
+		}
+	}
+}
