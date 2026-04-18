@@ -4,12 +4,12 @@ pkg: github.com/soumitradev/barkov/v2
 cpu: AMD Ryzen 9 7900 12-Core Processor
             │ /tmp/v1_bench.txt │            /tmp/v2_bench.txt            │
             │      sec/op       │    sec/op     vs base                   │
-Pipeline-24         815.8m ± 7%   208.2m ± 15%  -74.47% (p=0.000 n=10+15)
+Pipeline-24         815.8m ± 7%   168.9m ± 11%  -79.29% (p=0.000 n=10+20)
 
             │ /tmp/v1_bench.txt │            /tmp/v2_bench.txt            │
             │       B/op        │     B/op      vs base                   │
-Pipeline-24        414.4Mi ± 0%   139.3Mi ± 0%  -66.39% (p=0.000 n=10+15)
+Pipeline-24        414.4Mi ± 0%   101.5Mi ± 0%  -75.51% (p=0.000 n=10+20)
 
             │ /tmp/v1_bench.txt │           /tmp/v2_bench.txt            │
             │     allocs/op     │  allocs/op   vs base                   │
-Pipeline-24       2986.75k ± 0%   58.16k ± 0%  -98.05% (p=0.000 n=10+15)
+Pipeline-24       2986.75k ± 0%   52.51k ± 0%  -98.24% (p=0.000 n=10+20)

@@ -122,7 +122,7 @@ Allocations per op go up on the interned path because interning has fixed per-bu
 ## Compatibility
 
 > [!IMPORTANT]
-> If you're on `v1.x`, upgrade. On the same corpus, the `v2.x` best-case pipeline is roughly 4x faster, uses about 3x less memory, and allocates ~50x fewer times per op than `v1.0.3`. See `benchstat/v1_vs_v2.txt`. `MIGRATION.md` has before/after snippets for every API change.
+> If you're on `v1.x`, upgrade. On the same corpus, the `v2.x` best-case pipeline (stateSize=4 via `interned.BuildCompressedIndexed`) is roughly 4.8x faster, uses about 4x less memory, and allocates ~57x fewer times per op than `v1.0.3`. See `benchstat/v1_vs_v2.txt`. `MIGRATION.md` has before/after snippets for every API change.
 
 `v1.x` (the pre-generics string-only API) is retained on `main` for critical bug fixes. It is frozen at `v1.0.3` for features.
 
