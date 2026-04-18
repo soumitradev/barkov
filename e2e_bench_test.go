@@ -82,18 +82,18 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 
 	b.Run("interned/plain", func(b *testing.B) {
 		for b.Loop() {
-			chain, vocab := interned.InitChain(4)
+			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := chain.BuildCompressed(encoded)
+			compressed := interned.BuildCompressedIndexed(encoded)
 			barkov.Gen(ctx, compressed) //nolint
 		}
 	})
 
 	b.Run("interned/NGramSet", func(b *testing.B) {
 		for b.Loop() {
-			chain, vocab := interned.InitChain(4)
+			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := chain.BuildCompressed(encoded)
+			compressed := interned.BuildCompressedIndexed(encoded)
 			v := barkov.NewNGramSet(e2eCorpusInterned, n, packedEnc).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -101,9 +101,9 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 
 	b.Run("interned/FNV", func(b *testing.B) {
 		for b.Loop() {
-			chain, vocab := interned.InitChain(4)
+			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := chain.BuildCompressed(encoded)
+			compressed := interned.BuildCompressedIndexed(encoded)
 			v := nhash.New(e2eCorpusInterned, n, packedEnc, fnv.FNV{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -111,9 +111,9 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 
 	b.Run("interned/XXH3", func(b *testing.B) {
 		for b.Loop() {
-			chain, vocab := interned.InitChain(4)
+			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := chain.BuildCompressed(encoded)
+			compressed := interned.BuildCompressedIndexed(encoded)
 			v := nhash.New(e2eCorpusInterned, n, packedEnc, xxh3.XXH3{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
