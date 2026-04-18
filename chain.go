@@ -95,34 +95,79 @@ func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 // BuildRaw constructs the chain from a pre-encoded corpus. Unlike Build,
 // it does not convert from strings — the corpus is already in the target
 // token type T. This is the canonical, generic build path.
+//
+// When the encoder implements AppendEncoder[T], BuildRaw uses a
+// zero-allocation scratch buffer and arena-interned map keys, dropping
+// per-observation allocations to zero on the hot loop. Custom encoders
+// without AppendEncoder fall back to the simple per-call Encode path.
 func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	beginSeq := make([]T, c.stateSize)
 	for i := range beginSeq {
 		beginSeq[i] = c.sentinels.Begin
 	}
 
-	maxLen := 0
+	maxLen, totalObs := 0, 0
 	for _, run := range corpus {
 		if len(run) > maxLen {
 			maxLen = len(run)
 		}
+		totalObs += len(run) + 1
 	}
 	items := make([]T, 0, c.stateSize+maxLen+1)
 
-	for _, run := range corpus {
-		items = items[:0]
-		items = append(items, beginSeq...)
-		items = append(items, run...)
-		items = append(items, c.sentinels.End)
+	if appendEnc, ok := any(c.encoder).(AppendEncoder[T]); ok {
+		// Fast path: encoder supports zero-alloc append. Each observation
+		// encodes the state into a reusable scratch buffer and probes the
+		// map using an unsafe string view over that scratch — nothing is
+		// allocated if the state has been seen. Only the first time a
+		// state is observed do we publish the key bytes into the arena.
+		estUnique := totalObs/4 + 64
+		arena := newKeyArena(estUnique * c.stateSize * 8)
+		scratch := make([]byte, 0, 256)
+		if len(c.Model) == 0 {
+			c.Model = make(map[string]map[T]uint32, estUnique)
+		}
 
-		for i := 0; i < len(run)+1; i++ {
-			state := c.encoder.Encode(items[i : i+c.stateSize])
-			follow := items[i+c.stateSize]
+		for _, run := range corpus {
+			items = items[:0]
+			items = append(items, beginSeq...)
+			items = append(items, run...)
+			items = append(items, c.sentinels.End)
 
-			if _, ok := c.Model[state]; !ok {
-				c.Model[state] = make(map[T]uint32)
+			for i := 0; i < len(run)+1; i++ {
+				scratch = scratch[:0]
+				scratch = appendEnc.AppendEncoded(scratch, items[i:i+c.stateSize])
+				follow := items[i+c.stateSize]
+
+				tempKey := unsafe.String(unsafe.SliceData(scratch), len(scratch))
+				if inner, ok := c.Model[tempKey]; ok {
+					inner[follow]++
+					continue
+				}
+				stableKey := arena.Append(scratch)
+				inner := make(map[T]uint32, 2)
+				c.Model[stableKey] = inner
+				inner[follow]++
 			}
-			c.Model[state][follow]++
+		}
+	} else {
+		for _, run := range corpus {
+			items = items[:0]
+			items = append(items, beginSeq...)
+			items = append(items, run...)
+			items = append(items, c.sentinels.End)
+
+			for i := 0; i < len(run)+1; i++ {
+				state := c.encoder.Encode(items[i : i+c.stateSize])
+				follow := items[i+c.stateSize]
+
+				inner, ok := c.Model[state]
+				if !ok {
+					inner = make(map[T]uint32, 2)
+					c.Model[state] = inner
+				}
+				inner[follow]++
+			}
 		}
 	}
 
