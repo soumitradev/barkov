@@ -45,7 +45,7 @@ out, err := barkov.Gen(ctx, compressed,
 ```
 
 > [!TIP]
-> If your stateSize is exactly 4, swap `chain.BuildCompressed(encoded)` for `interned.BuildCompressedIndexed(encoded)`. That returns a `*IndexedCompressedChain` whose state map is keyed on a pointer-free 16-byte packed array instead of a string — the entire bucket array is invisible to the GC mark cycle. The returned chain implements `GenerativeChain[interned.TokenID]`, so `Gen` / `GenIter` / `WithValidator` / `WithThreaded` work on it unchanged.
+> If your stateSize is exactly 4, swap `chain.BuildCompressed(encoded)` for `interned.BuildCompressedIndexed(encoded)` — it's roughly twice as fast on large corpora (see `benchstat/e2e_v2.0.0-beta.4.txt`, `interned/plain-24`). The returned chain satisfies `GenerativeChain[interned.TokenID]`, so the rest of your code is unchanged.
 
 ### Tier 3 — Custom (`examples/custom`)
 

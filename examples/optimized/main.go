@@ -80,18 +80,14 @@ func main() {
 }
 
 // -----------------------------------------------------------------------
-// If your stateSize is exactly 4, you can swap the generic build line
-// for interned.BuildCompressedIndexed(encoded). That returns an
-// IndexedCompressedChain whose state map is keyed on a pointer-free
-// 16-byte packed array instead of a string — the entire bucket array is
-// invisible to the GC mark cycle, giving another large step down in
-// end-to-end time (see benchstat/final_comparison.txt).
+// If your stateSize is exactly 4, swap the build line for
+// interned.BuildCompressedIndexed(encoded). On large corpora it's
+// roughly twice as fast than the generic build path (see
+// benchstat/e2e_v2.0.0-beta.4.txt, the interned/plain-24 row). The
+// returned chain satisfies GenerativeChain[TokenID] so everything
+// downstream keeps working.
 //
 //	// stateSize=4 only:
 //	indexed := interned.BuildCompressedIndexed(encoded)
 //	barkov.Gen(ctx, indexed, barkov.WithValidator(validator))
-//
-// The IndexedCompressedChain implements GenerativeChain[TokenID], so
-// everything downstream (Gen, WithValidator, WithThreaded, GenIter) works
-// unchanged.
 // -----------------------------------------------------------------------
