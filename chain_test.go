@@ -144,6 +144,89 @@ func (intEncoder) Decode(state string) []int {
 	return result
 }
 
+// TestBuildCompressedEquivalence asserts that the direct BuildCompressed
+// path produces structurally equivalent output to the legacy
+// BuildRaw().Compress() pipeline. Order within a state group is
+// unspecified, so Choices/CumDist are compared as multisets of
+// (token, count) pairs derived from the cumulative deltas.
+func TestBuildCompressedEquivalence(t *testing.T) {
+	cases := []struct {
+		name   string
+		corpus [][]string
+	}{
+		{"empty", [][]string{}},
+		{"single_long", [][]string{{"the", "quick", "brown", "fox", "jumps", "over"}}},
+		{"shorter_than_state", [][]string{{"a"}, {"b", "c"}, {"d", "e", "f", "g"}}},
+		{"duplicates", [][]string{
+			{"a", "b", "c", "d", "e"},
+			{"a", "b", "c", "d", "e"},
+			{"a", "b", "c", "d", "e"},
+		}},
+		{"every_ngram_unique", [][]string{
+			{"alpha", "beta", "gamma", "delta", "epsilon"},
+			{"zeta", "eta", "theta", "iota", "kappa"},
+		}},
+		{"every_ngram_same", [][]string{
+			{"x", "x", "x", "x", "x", "x", "x", "x"},
+		}},
+		{"mixed", [][]string{
+			{"the", "cat", "sat", "on", "the", "mat"},
+			{"the", "dog", "sat", "on", "the", "log"},
+			{"a", "b"},
+			{"the", "cat", "ran", "away"},
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := InitChain(4).Build(tc.corpus).Compress()
+			b := InitChain(4).BuildCompressed(tc.corpus)
+
+			if len(a.Model) != len(b.Model) {
+				t.Fatalf("Model size mismatch: Build+Compress=%d, BuildCompressed=%d",
+					len(a.Model), len(b.Model))
+			}
+
+			for state, aIdx := range a.Model {
+				bIdx, ok := b.Model[state]
+				if !ok {
+					t.Errorf("state %q missing from BuildCompressed model", state)
+					continue
+				}
+				if aIdx.Count != bIdx.Count {
+					t.Errorf("state %q: Count mismatch a=%d b=%d", state, aIdx.Count, bIdx.Count)
+					continue
+				}
+
+				aCounts := extractCounts(a.Choices, a.CumDist, aIdx)
+				bCounts := extractCounts(b.Choices, b.CumDist, bIdx)
+				if len(aCounts) != len(bCounts) {
+					t.Errorf("state %q: distinct-follow count differs a=%d b=%d",
+						state, len(aCounts), len(bCounts))
+					continue
+				}
+				for tok, ac := range aCounts {
+					if bc := bCounts[tok]; bc != ac {
+						t.Errorf("state %q token %q: count mismatch a=%d b=%d",
+							state, tok, ac, bc)
+					}
+				}
+			}
+		})
+	}
+}
+
+func extractCounts(choices []string, cumDist []uint32, idx ChoicesIndex) map[string]uint32 {
+	out := make(map[string]uint32, idx.Count)
+	var prev uint32
+	for i := uint32(0); i < uint32(idx.Count); i++ {
+		off := idx.Offset + i
+		out[choices[off]] = cumDist[off] - prev
+		prev = cumDist[off]
+	}
+	return out
+}
+
 func containsString(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
