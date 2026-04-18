@@ -21,7 +21,7 @@ import (
 // (for example) FastMoverKey[[3]TokenID, TokenID] and
 // FastMoverKey[[4]TokenID, TokenID] are separate interfaces.
 type indexedCore[K comparable] struct {
-	Model     map[K]barkov.ChoicesIndex
+	Model     *stateMap[K, barkov.ChoicesIndex]
 	Choices   []TokenID
 	CumDist   []uint32
 	sentinels barkov.Sentinels[TokenID]
@@ -60,7 +60,7 @@ func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
 // when the chain's stateSize matches a registered FastMoverKey[[N]T, T],
 // bypassing encoder.Encode + the Move(string) roundtrip.
 func (c *indexedCore[K]) MoveKey(key K) (TokenID, error) {
-	idx, ok := c.Model[key]
+	idx, ok := c.Model.Get(key)
 	if !ok {
 		return 0, fmt.Errorf("barkov: state %v not in model: %w", key, barkov.ErrStateNotFound)
 	}
@@ -77,7 +77,7 @@ func (c *indexedCore[K]) Move(state string) (TokenID, error) {
 		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, barkov.ErrStateNotFound)
 	}
 	key := *(*K)(unsafe.Pointer(unsafe.StringData(state)))
-	idx, ok := c.Model[key]
+	idx, ok := c.Model.Get(key)
 	if !ok {
 		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, barkov.ErrStateNotFound)
 	}
@@ -112,6 +112,10 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 	// forcing the map through several rehashes and the slice through
 	// multiple doublings. Using totalObs as the upper bound wastes ~20% of
 	// one slice + one map in slack, but eliminates all growth cost.
+	// stateIdx is transient (freed when buildIndexedCore returns). Keep it
+	// on Go's runtime map; the custom stateMap's 0.5 load-factor sizing
+	// roughly doubles build-time memory for no gen-path payoff — the
+	// build-path lookup isn't hot enough to offset the extra RAM.
 	estUnique := totalObs + 64
 	stateIdx := make(map[K]uint32, estUnique)
 	stateKeys := make([]K, 0, estUnique)
@@ -159,7 +163,7 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 	cc := &indexedCore[K]{
 		sentinels: sentinels,
 		encoder:   PackedEncoder{},
-		Model:     make(map[K]barkov.ChoicesIndex, numStates),
+		Model:     newStateMap[K, barkov.ChoicesIndex](numStates),
 		Choices:   make([]TokenID, 0, totalObs),
 		CumDist:   make([]uint32, 0, totalObs),
 		stateSize: stateSize,
@@ -212,10 +216,10 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			total += cc.CumDist[m]
 			cc.CumDist[m] = total
 		}
-		cc.Model[stateKeys[s]] = barkov.ChoicesIndex{
+		cc.Model.Put(stateKeys[s], barkov.ChoicesIndex{
 			Offset: offset,
 			Count:  uint16(len(cc.Choices) - groupStart),
-		}
+		})
 	}
 	return cc
 }

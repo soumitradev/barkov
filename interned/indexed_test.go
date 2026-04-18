@@ -39,9 +39,9 @@ func checkIndexedEquiv[K comparable](t *testing.T, stateSize int, corpus [][]str
 	baseline := chain.BuildCompressed(encoded)
 	indexed := buildIndexedCore[K](encoded)
 
-	if len(baseline.Model) != len(indexed.Model) {
+	if len(baseline.Model) != indexed.Model.Len() {
 		t.Fatalf("model size mismatch: baseline=%d indexed=%d",
-			len(baseline.Model), len(indexed.Model))
+			len(baseline.Model), indexed.Model.Len())
 	}
 
 	for stateKey, baseIdx := range baseline.Model {
@@ -49,7 +49,7 @@ func checkIndexedEquiv[K comparable](t *testing.T, stateSize int, corpus [][]str
 			t.Fatalf("unexpected state key length: got %d want %d", len(stateKey), stateSize*4)
 		}
 		key := *(*K)(unsafe.Pointer(unsafe.StringData(stateKey)))
-		idxRef, ok := indexed.Model[key]
+		idxRef, ok := indexed.Model.Get(key)
 		if !ok {
 			t.Errorf("indexed missing state key (baseline count=%d)", baseIdx.Count)
 			continue
