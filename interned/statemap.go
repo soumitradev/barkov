@@ -15,7 +15,15 @@ import (
 // fixed-size PODs). Hashing goes through maphash.Comparable, which
 // uses the same runtime.memhash the map would have used anyway; the
 // win is in the probe loop, not the hash.
-type stateMap[K comparable, V any] struct {
+//
+// V must be comparable and its zero value must be used as the "slot
+// empty" sentinel — callers must never insert a zero-valued V. For
+// ChoicesIndex this is free: Count==0 is never valid for a real
+// state (every state has ≥1 follow token). Dropping an occupied
+// bool shrinks [4]TokenID entries from 28→24 bytes (14% denser
+// bucket array), measurably reducing cache-miss cost on the gen-
+// path probe loop.
+type stateMap[K comparable, V comparable] struct {
 	entries []stateEntry[K, V]
 	mask    uint32
 	count   uint32
@@ -25,10 +33,9 @@ type stateMap[K comparable, V any] struct {
 	seed   maphash.Seed
 }
 
-type stateEntry[K comparable, V any] struct {
-	key      K
-	val      V
-	occupied bool
+type stateEntry[K comparable, V comparable] struct {
+	key K
+	val V
 }
 
 // Grow at 1/2 load. Power-of-2 rounding lands the fill-time load factor
@@ -43,7 +50,7 @@ const (
 
 // newStateMap returns a stateMap sized so that `sizeHint` entries
 // fit under the load-factor threshold without a resize.
-func newStateMap[K comparable, V any](sizeHint int) *stateMap[K, V] {
+func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
 	// Need capacity such that sizeHint < capacity*loadFactorNum/loadFactorDen.
 	minCap := (sizeHint*loadFactorDen + loadFactorNum - 1) / loadFactorNum
 	capacity := 16
@@ -63,10 +70,10 @@ func newStateMap[K comparable, V any](sizeHint int) *stateMap[K, V] {
 func (m *stateMap[K, V]) Get(key K) (V, bool) {
 	h := uint32(maphash.Comparable(m.seed, key))
 	i := h & m.mask
+	var zero V
 	for {
 		e := &m.entries[i]
-		if !e.occupied {
-			var zero V
+		if e.val == zero {
 			return zero, false
 		}
 		if e.key == key {
@@ -85,12 +92,12 @@ func (m *stateMap[K, V]) GetOrSet(key K, newVal V) (V, bool) {
 	}
 	h := uint32(maphash.Comparable(m.seed, key))
 	i := h & m.mask
+	var zero V
 	for {
 		e := &m.entries[i]
-		if !e.occupied {
+		if e.val == zero {
 			e.key = key
 			e.val = newVal
-			e.occupied = true
 			m.count++
 			return newVal, false
 		}
@@ -112,12 +119,12 @@ func (m *stateMap[K, V]) Put(key K, val V) {
 func (m *stateMap[K, V]) putNoGrow(key K, val V) {
 	h := uint32(maphash.Comparable(m.seed, key))
 	i := h & m.mask
+	var zero V
 	for {
 		e := &m.entries[i]
-		if !e.occupied {
+		if e.val == zero {
 			e.key = key
 			e.val = val
-			e.occupied = true
 			m.count++
 			return
 		}
@@ -136,8 +143,9 @@ func (m *stateMap[K, V]) grow() {
 	m.mask = uint32(newCap - 1)
 	m.growAt = uint32(newCap) * loadFactorNum / loadFactorDen
 	m.count = 0
+	var zero V
 	for i := range old {
-		if old[i].occupied {
+		if old[i].val != zero {
 			m.putNoGrow(old[i].key, old[i].val)
 		}
 	}
