@@ -23,17 +23,37 @@ type HashNGramSet[T comparable] struct {
 
 // New builds a HashNGramSet from a corpus. n is the n-gram width; encoder
 // converts token slices to byte strings; hasher hashes those byte strings.
+// When the encoder implements barkov.AppendEncoder[T] the build hashes
+// directly from a reusable scratch buffer, avoiding any string allocation.
 func New[T comparable](
 	corpus [][]T,
 	n int,
 	encoder barkov.StateEncoder[T],
 	hasher hashers.Hasher,
 ) *HashNGramSet[T] {
-	set := make(map[uint64]struct{}, len(corpus)*4)
+	total := 0
 	for _, tokens := range corpus {
-		for i := 0; i <= len(tokens)-n; i++ {
-			key := encoder.Encode(tokens[i : i+n])
-			set[hashString(hasher, key)] = struct{}{}
+		if len(tokens) >= n {
+			total += len(tokens) - n + 1
+		}
+	}
+	set := make(map[uint64]struct{}, total/2+16)
+
+	if appendEnc, ok := any(encoder).(barkov.AppendEncoder[T]); ok {
+		scratch := make([]byte, 0, 256)
+		for _, tokens := range corpus {
+			for i := 0; i <= len(tokens)-n; i++ {
+				scratch = scratch[:0]
+				scratch = appendEnc.AppendEncoded(scratch, tokens[i:i+n])
+				set[hasher.Hash(scratch)] = struct{}{}
+			}
+		}
+	} else {
+		for _, tokens := range corpus {
+			for i := 0; i <= len(tokens)-n; i++ {
+				key := encoder.Encode(tokens[i : i+n])
+				set[hashString(hasher, key)] = struct{}{}
+			}
 		}
 	}
 	return &HashNGramSet[T]{hashes: set, n: n, hasher: hasher, encoder: encoder}
@@ -47,9 +67,26 @@ func (s *HashNGramSet[T]) Contains(gram []T) bool {
 }
 
 // Validator returns a function suitable for WithValidator that rejects any
-// gram present in the set.
+// gram present in the set. When the encoder implements AppendEncoder[T],
+// the returned closure is specialised to skip the per-call type assertion
+// and avoid allocating a string per gram.
 func (s *HashNGramSet[T]) Validator() func([]T) bool {
-	return func(gram []T) bool { return !s.Contains(gram) }
+	hashes := s.hashes
+	hasher := s.hasher
+	if appendEnc, ok := any(s.encoder).(barkov.AppendEncoder[T]); ok {
+		return func(gram []T) bool {
+			var buf [256]byte
+			scratch := appendEnc.AppendEncoded(buf[:0], gram)
+			_, found := hashes[hasher.Hash(scratch)]
+			return !found
+		}
+	}
+	encoder := s.encoder
+	return func(gram []T) bool {
+		key := encoder.Encode(gram)
+		_, found := hashes[hashString(hasher, key)]
+		return !found
+	}
 }
 
 // Size returns the number of unique n-grams in the set.
