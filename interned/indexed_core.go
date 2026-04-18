@@ -109,17 +109,15 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		totalObs += len(run) + 1
 	}
 
-	// Observed ratio on the public corpus: numStates ≈ 0.82 * totalObs
-	// (fanout barely >1). The old estimate of totalObs/4 undershot by ~3.3x,
-	// forcing the map through several rehashes and the slice through
-	// multiple doublings. Using totalObs as the upper bound wastes ~20% of
-	// one slice + one map in slack, but eliminates all growth cost.
-	// stateIdx is transient (freed when buildIndexedCore returns). Keep it
-	// on Go's runtime map; the custom stateMap's 0.5 load-factor sizing
-	// roughly doubles build-time memory for no gen-path payoff — the
-	// build-path lookup isn't hot enough to offset the extra RAM.
+	// stateIdx is transient (freed when buildIndexedCore returns), but
+	// profiling showed Go's map probes (mapaccess2 + ctrlGroup.matchH2)
+	// dominating build time. Swap to the same custom stateMap used for
+	// the gen-path Model — tight-sized for the transient lifetime, and
+	// no Model-size impact since the final Model is built separately.
+	// Values are stored as idx+1 so the zero-value-sentinel contract
+	// (stateMap treats V==zero as empty) holds for legitimate idx=0.
 	estUnique := totalObs + 64
-	stateIdx := make(map[K]uint32, estUnique)
+	stateIdx := newStateMap[K, uint32](estUnique)
 	stateKeys := make([]K, 0, estUnique)
 	items := make([]TokenID, 0, stateSize+maxLen+1)
 
@@ -137,13 +135,13 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			// so reinterpreting the first stateSize*4 bytes as K is safe.
 			key := *(*K)(unsafe.Pointer(&items[i]))
 			follow := items[i+stateSize]
-			existing, ok := stateIdx[key]
+			newStored := uint32(len(stateKeys)) + 1
+			existing, found := stateIdx.GetOrSet(key, newStored)
 			var idx uint32
-			if ok {
-				idx = existing
+			if found {
+				idx = existing - 1
 			} else {
-				idx = uint32(len(stateKeys))
-				stateIdx[key] = idx
+				idx = newStored - 1
 				stateKeys = append(stateKeys, key)
 			}
 			pendingState = append(pendingState, idx)
