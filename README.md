@@ -29,12 +29,12 @@ out, err := barkov.Gen(context.Background(), chain)
 
 ### Tier 2 — Tuned (`examples/optimized`)
 
-Token IDs instead of strings, a pointer-free state map, and a hashed n-gram validator.
+Same surface, every performance lever pulled: token interning, packed state keys, xxh3-hashed validator, threaded retries.
 
 ```go
-vocab := interned.NewVocabulary()
+chain, vocab := interned.InitChain(stateSize)
 encoded := vocab.InternCorpus(corpus)
-compressed := interned.BuildCompressedIndexed(encoded) // stateSize=4
+compressed := chain.BuildCompressed(encoded)
 
 validator := nhash.New(encoded, compressed.MaxOverlap(), interned.PackedEncoder{}, xxh3.XXH3{}).Validator()
 
@@ -43,6 +43,8 @@ out, err := barkov.Gen(ctx, compressed,
     barkov.WithThreaded[interned.TokenID](),
 )
 ```
+
+**If stateSize happens to be 4**, swap `chain.BuildCompressed(encoded)` for `interned.BuildCompressedIndexed(encoded)`. That returns a `*IndexedCompressedChain` whose state map is keyed on a pointer-free 16-byte packed array instead of a string — the entire bucket array is invisible to the GC mark cycle. See the callout at the bottom of `examples/optimized/main.go`.
 
 ### Tier 3 — Custom (`examples/custom`)
 

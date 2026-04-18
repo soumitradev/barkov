@@ -5,7 +5,7 @@ Three runnable programs, one per usage tier.
 | Dir | Tier | Shows |
 | --- | --- | --- |
 | `simple/` | 1. Drop-in | `InitChain(2).BuildCompressed(corpus)` + `Gen` — string chain, no validator, no interning. |
-| `optimized/` | 2. Tuned | `interned.NewVocabulary` + `BuildCompressedIndexed` (stateSize=4, pointer-free state map) + `nhash.New(..., xxh3.XXH3{})` validator. |
+| `optimized/` | 2. Tuned | `interned.InitChain(n)` + `chain.BuildCompressed(encoded)` + `nhash.New(..., xxh3.XXH3{})` validator + `WithThreaded`. Works for any stateSize. A callout at the bottom shows the extra `BuildCompressedIndexed` specialisation for stateSize=4. |
 | `custom/` | 3. Custom | `barkov.NewChain(ChainConfig[int64]{...})` with a user-supplied `StateEncoder[int64]` / `AppendEncoder[int64]`. No strings. |
 
 Each program embeds its own toy corpus and prints 5 sample generations.
