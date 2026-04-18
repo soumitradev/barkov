@@ -1,0 +1,26 @@
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+BenchmarkBuild-4             	       4	 297448236 ns/op	230701440 B/op	 1108313 allocs/op
+BenchmarkBuild-4             	       4	 289515064 ns/op	230756032 B/op	 1108317 allocs/op
+BenchmarkBuild-4             	       5	 248561251 ns/op	230739657 B/op	 1108316 allocs/op
+BenchmarkBuild-4             	       4	 278884459 ns/op	230687800 B/op	 1108312 allocs/op
+BenchmarkBuild-4             	       5	 245653395 ns/op	230739654 B/op	 1108315 allocs/op
+BenchmarkCompress-4          	       5	 246640869 ns/op	40224176 B/op	    2053 allocs/op
+BenchmarkCompress-4          	       5	 238724773 ns/op	40224176 B/op	    2053 allocs/op
+BenchmarkCompress-4          	       4	 261803720 ns/op	40224176 B/op	    2053 allocs/op
+BenchmarkCompress-4          	       5	 247930476 ns/op	40224176 B/op	    2053 allocs/op
+BenchmarkCompress-4          	       4	 252982274 ns/op	40224176 B/op	    2053 allocs/op
+BenchmarkBuildCompressed-4   	       5	 251378160 ns/op	188290216 B/op	    5791 allocs/op
+BenchmarkBuildCompressed-4   	       4	 261546846 ns/op	188290216 B/op	    5791 allocs/op
+BenchmarkBuildCompressed-4   	       4	 262748998 ns/op	188290216 B/op	    5791 allocs/op
+BenchmarkBuildCompressed-4   	       4	 256910266 ns/op	188290216 B/op	    5791 allocs/op
+BenchmarkBuildCompressed-4   	       4	 252362735 ns/op	188290216 B/op	    5791 allocs/op
+BenchmarkEndToEnd-4          	       2	 501352011 ns/op	270955600 B/op	 1110396 allocs/op
+BenchmarkEndToEnd-4          	       3	 507872657 ns/op	271046624 B/op	 1110403 allocs/op
+BenchmarkEndToEnd-4          	       2	 518728908 ns/op	270955520 B/op	 1110393 allocs/op
+BenchmarkEndToEnd-4          	       3	 513339819 ns/op	270919194 B/op	 1110392 allocs/op
+BenchmarkEndToEnd-4          	       2	 512215984 ns/op	270928320 B/op	 1110393 allocs/op
+PASS
+ok  	github.com/soumitradev/barkov/v2	26.834s
