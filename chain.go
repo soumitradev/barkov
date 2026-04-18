@@ -4,7 +4,52 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sort"
+	"unsafe"
 )
+
+// keyArena is a growable byte slab that hands out non-aliasing substrings
+// for use as map keys. A new chunk is allocated only when the current one
+// cannot fit an appended key; old chunks remain alive because the strings
+// returned by Append reference them. The arena therefore produces N
+// immutable strings using O(log N) allocations regardless of N, replacing
+// the N per-key allocations of a naïve per-call encoder.
+type keyArena struct {
+	chunks [][]byte // retired chunks kept alive by outstanding string refs
+	cur    []byte   // active chunk; we only ever append within its cap
+}
+
+func newKeyArena(initialCap int) *keyArena {
+	if initialCap < 4096 {
+		initialCap = 4096
+	}
+	return &keyArena{cur: make([]byte, 0, initialCap)}
+}
+
+// Append records b as an immutable string key backed by the arena. The
+// returned string's backing storage stays valid for the arena's lifetime
+// because we never overwrite arena bytes once published.
+func (a *keyArena) Append(b []byte) string {
+	need := len(b)
+	if need == 0 {
+		return ""
+	}
+	if cap(a.cur)-len(a.cur) < need {
+		// Retire the current chunk; start a new one big enough for this
+		// key and large enough to amortise future appends.
+		a.chunks = append(a.chunks, a.cur)
+		newCap := cap(a.cur) * 2
+		if newCap < need {
+			newCap = need * 2
+		}
+		if newCap < 4096 {
+			newCap = 4096
+		}
+		a.cur = make([]byte, 0, newCap)
+	}
+	start := len(a.cur)
+	a.cur = append(a.cur, b...)
+	return unsafe.String(&a.cur[start], need)
+}
 
 // Compile-time check that Chain implements GenerativeChain.
 var _ GenerativeChain[string] = (*Chain[string])(nil)
