@@ -44,7 +44,8 @@ out, err := barkov.Gen(ctx, compressed,
 )
 ```
 
-**If stateSize happens to be 4**, swap `chain.BuildCompressed(encoded)` for `interned.BuildCompressedIndexed(encoded)`. That returns a `*IndexedCompressedChain` whose state map is keyed on a pointer-free 16-byte packed array instead of a string — the entire bucket array is invisible to the GC mark cycle. See the callout at the bottom of `examples/optimized/main.go`.
+> [!TIP]
+> If your stateSize is exactly 4, swap `chain.BuildCompressed(encoded)` for `interned.BuildCompressedIndexed(encoded)`. That returns a `*IndexedCompressedChain` whose state map is keyed on a pointer-free 16-byte packed array instead of a string — the entire bucket array is invisible to the GC mark cycle. The returned chain implements `GenerativeChain[interned.TokenID]`, so `Gen` / `GenIter` / `WithValidator` / `WithThreaded` work on it unchanged.
 
 ### Tier 3 — Custom (`examples/custom`)
 

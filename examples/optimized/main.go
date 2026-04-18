@@ -26,8 +26,6 @@ import (
 	"github.com/soumitradev/barkov/v2/nhash"
 )
 
-const stateSize = 2
-
 func main() {
 	corpus := [][]string{
 		strings.Fields("the quick brown fox jumps over the lazy dog"),
@@ -40,7 +38,7 @@ func main() {
 		strings.Fields("a lazy fox sleeps under the warm sun all day long"),
 	}
 
-	chain, vocab := interned.InitChain(stateSize)
+	chain, vocab := interned.InitChain(2)
 	encoded := vocab.InternCorpus(corpus)
 	compressed := chain.BuildCompressed(encoded)
 
