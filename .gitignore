@@ -5,6 +5,7 @@ PERF_PLAN.md
 # Benchmark audit snapshots
 benchstat/public_api_*.txt
 benchstat/compat_floor_interned.txt
+benchstat/tmp/
 
 # Build artifacts and profiling output
 *.test
@@ -13,6 +14,8 @@ benchstat/compat_floor_interned.txt
 # Local tooling
 mise.toml
 .remember/
+.claude/
+go.work.sum
 
 # Extra test data
 testdata/corpus_50k.txt
