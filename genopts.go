@@ -49,7 +49,7 @@ func WithSeed[T comparable](seed []T) GenOption[T] {
 }
 
 // WithValidator installs an n-gram validator. The function is called
-// with the last MaxOverlap tokens after each step; returning false aborts
+// with the last StateSize+2 tokens after each step; returning false aborts
 // the current attempt with ErrSentenceFailedValidation.
 func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
 	return func(c *genConfig[T]) { c.validator = v }

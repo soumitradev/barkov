@@ -35,7 +35,6 @@ type indexedCore[K comparable] struct {
 func (c *indexedCore[K]) SetRNG(r *rand.Rand) { c.rng = r }
 
 func (c *indexedCore[K]) StateSize() int                        { return c.stateSize }
-func (c *indexedCore[K]) MaxOverlap() int                       { return c.stateSize + 2 }
 func (c *indexedCore[K]) Sentinels() barkov.Sentinels[TokenID]  { return c.sentinels }
 func (c *indexedCore[K]) Encoder() barkov.StateEncoder[TokenID] { return c.encoder }
 

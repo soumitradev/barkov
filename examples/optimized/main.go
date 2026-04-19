@@ -58,7 +58,7 @@ func main() {
 	// nearly every attempt — that's expected. WithThreaded retries.
 	validator := nhash.New(
 		encoded,
-		compressed.MaxOverlap(),
+		compressed.StateSize()+2,
 		interned.PackedEncoder{},
 		xxh3.XXH3{},
 	).Validator()
@@ -80,16 +80,14 @@ func main() {
 }
 
 // -----------------------------------------------------------------------
-// For stateSizes 2–8, swap the build line for
-// interned.BuildCompressedIndexedN(encoded) (N matching your stateSize,
-// e.g. BuildCompressedIndexed5). BuildCompressedIndexed without a
-// suffix is shorthand for N=4. On large corpora these indexed chains
-// run roughly 1.7x faster and use about 35% less memory than the
-// generic build path (see benchstat/pipeline_simple_vs_maxopt.txt).
-// The returned chain satisfies GenerativeChain[TokenID] so everything
-// downstream keeps working.
+// For stateSizes 2–8, swap the build line for the indexed builder. On
+// large corpora we've observed this path running roughly 1.7x faster
+// and using about 35% less memory than the generic build path (see
+// benchstat/pipeline_simple_vs_maxopt.txt). Everything downstream keeps
+// working unchanged. If you need the concrete type (e.g. for SetRNG or
+// direct MoveKey), call BuildCompressedIndexedN instead.
 //
-//	indexed := interned.BuildCompressedIndexed(encoded) // N=4
-//	// indexed := interned.BuildCompressedIndexed5(encoded) // N=5
+//	indexed := interned.BuildCompressedIndexed(4, encoded) // stateSize 2..8
+//	// indexed := interned.BuildCompressedIndexed5(encoded) // concrete N=5
 //	barkov.Gen(ctx, indexed, barkov.WithValidator(validator))
 // -----------------------------------------------------------------------

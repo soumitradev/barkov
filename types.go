@@ -7,9 +7,11 @@ const END = "</END/>"
 // GenerativeChain is the minimum interface needed to generate text.
 // All methods are EXPORTED so users in other packages can implement
 // their own chain types.
+//
+// Gen computes the validator window as StateSize()+2; that policy is
+// intentionally fixed and not a knob on the interface.
 type GenerativeChain[T comparable] interface {
 	StateSize() int
-	MaxOverlap() int
 	Sentinels() Sentinels[T]
 	Encoder() StateEncoder[T]
 	Move(state string) (T, error)

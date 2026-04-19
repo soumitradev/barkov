@@ -35,7 +35,7 @@ func init() {
 		}
 	}
 
-	testChain = InitChain(4).Build(testCorpus)
+	testChain = InitChain(4).BuildRaw(testCorpus)
 	testCompressed = testChain.Compress()
 
 	// Build map-based n-gram validator (string equivalent of NGramSet)
@@ -59,7 +59,7 @@ func init() {
 		}
 		// Take a 4-gram from the middle of a long sentence
 		mid := len(tokens) / 2
-		state := ConstructState(tokens[mid : mid+testChain.stateSize])
+		state := strings.Join(tokens[mid : mid+testChain.stateSize], SEP)
 		choices, ok := testChain.Model[state]
 		if !ok {
 			continue
@@ -82,12 +82,12 @@ func init() {
 
 func BenchmarkBuild(b *testing.B) {
 	for b.Loop() {
-		InitChain(4).Build(testCorpus)
+		InitChain(4).BuildRaw(testCorpus)
 	}
 }
 
 func BenchmarkCompress(b *testing.B) {
-	chain := InitChain(4).Build(testCorpus)
+	chain := InitChain(4).BuildRaw(testCorpus)
 	b.ResetTimer()
 	for b.Loop() {
 		chain.Compress()
@@ -102,17 +102,19 @@ func BenchmarkBuildCompressed(b *testing.B) {
 
 // --- State helpers ---
 
-func BenchmarkConstructState(b *testing.B) {
+func BenchmarkSepEncoderEncode(b *testing.B) {
+	enc := SepEncoder{Sep: SEP}
 	tokens := []string{"Call", "me", "Ishmael", "Some"}
 	for b.Loop() {
-		ConstructState(tokens)
+		enc.Encode(tokens)
 	}
 }
 
-func BenchmarkDeconstructState(b *testing.B) {
-	state := ConstructState([]string{"Call", "me", "Ishmael", "Some"})
+func BenchmarkSepEncoderDecode(b *testing.B) {
+	enc := SepEncoder{Sep: SEP}
+	state := enc.Encode([]string{"Call", "me", "Ishmael", "Some"})
 	for b.Loop() {
-		DeconstructState(state)
+		enc.Decode(state)
 	}
 }
 
@@ -183,7 +185,7 @@ func BenchmarkGenWithSeed(b *testing.B) {
 func BenchmarkEndToEnd(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
-		chain := InitChain(4).Build(testCorpus)
+		chain := InitChain(4).BuildRaw(testCorpus)
 		compressed := chain.Compress()
 		Gen(ctx, compressed) //nolint
 	}

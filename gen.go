@@ -42,6 +42,45 @@ func Gen[T comparable](
 	return out, nil
 }
 
+// fillInitialState writes [begin×pad, seed-tail...] into state. The
+// seed tail is the last len(state) tokens of seed (or all of seed if
+// shorter). state must already have its final length.
+func fillInitialState[T comparable](state []T, seed []T, begin T) {
+	for i := range state {
+		state[i] = begin
+	}
+	if len(seed) > len(state) {
+		seed = seed[len(seed)-len(state):]
+	}
+	copy(state[len(state)-len(seed):], seed)
+}
+
+// emitSeed yields every non-sentinel token from cfg.seed through yield,
+// appending to history along the way when history tracking is active.
+// Returns the updated history plus true if the iterator should keep
+// going, or the possibly-modified history and false if the consumer
+// stopped yielding early.
+func emitSeed[T comparable](
+	seed []T,
+	sentinels Sentinels[T],
+	history []T,
+	needHistory bool,
+	yield func(T, error) bool,
+) ([]T, bool) {
+	for _, tok := range seed {
+		if tok == sentinels.Begin || tok == sentinels.End {
+			continue
+		}
+		if needHistory {
+			history = append(history, tok)
+		}
+		if !yield(tok, nil) {
+			return history, false
+		}
+	}
+	return history, true
+}
+
 func genIterSingle[T comparable](
 	ctx context.Context,
 	chain GenerativeChain[T],
@@ -87,7 +126,7 @@ func genIterSingle[T comparable](
 		stateSize := chain.StateSize()
 		sentinels := chain.Sentinels()
 		encoder := chain.Encoder()
-		maxOverlap := chain.MaxOverlap()
+		maxOverlap := stateSize + 2
 		// Hoisted: if the encoder supports AppendEncoder, we build the state
 		// key each step into a stack scratch buffer instead of allocating a
 		// fresh string. The resulting string is only passed to chain.Move,
@@ -102,7 +141,7 @@ func genIterSingle[T comparable](
 		var state, history []T
 		if cfg.pool != nil {
 			sp := cfg.pool.GetState()
-			state = (*sp)[:0]
+			state = (*sp)[:stateSize]
 			if needHistory {
 				hp := cfg.pool.GetGenerated()
 				defer func() {
@@ -114,33 +153,18 @@ func genIterSingle[T comparable](
 				defer cfg.pool.PutState(sp)
 			}
 		} else {
-			state = make([]T, 0, stateSize)
+			state = make([]T, stateSize)
 			if needHistory {
 				history = make([]T, 0, 64)
 			}
 		}
 
-		// Build initial state, padding with Begin tokens if needed
-		for i := 0; i < stateSize-len(cfg.seed); i++ {
-			state = append(state, sentinels.Begin)
-		}
-		if len(cfg.seed) <= stateSize {
-			state = append(state, cfg.seed...)
-		} else {
-			// Seed is longer than state size, use the last stateSize tokens
-			state = append(state, cfg.seed[len(cfg.seed)-stateSize:]...)
-		}
+		fillInitialState(state, cfg.seed, sentinels.Begin)
 
-		// Yield seed tokens (without sentinels) up front
-		for _, tok := range cfg.seed {
-			if tok != sentinels.Begin && tok != sentinels.End {
-				if needHistory {
-					history = append(history, tok)
-				}
-				if !yield(tok, nil) {
-					return
-				}
-			}
+		var keepGoing bool
+		history, keepGoing = emitSeed(cfg.seed, sentinels, history, needHistory, yield)
+		if !keepGoing {
+			return
 		}
 
 		for {
@@ -204,8 +228,8 @@ func genIterSingleFast[T comparable, K comparable](
 ) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		sentinels := chain.Sentinels()
-		maxOverlap := chain.MaxOverlap()
 		stateSize := chain.StateSize()
+		maxOverlap := stateSize + 2
 
 		// history is only consumed by validator; skip it entirely otherwise.
 		needHistory := cfg.validator != nil
@@ -225,24 +249,12 @@ func genIterSingleFast[T comparable, K comparable](
 		// genIterSingle only selects this path for N ∈ 2..8.
 		var stateBuf [8]T
 		state := stateBuf[:stateSize]
-		for i := range state {
-			state[i] = sentinels.Begin
-		}
-		seed := cfg.seed
-		if len(seed) > stateSize {
-			seed = seed[len(seed)-stateSize:]
-		}
-		copy(state[stateSize-len(seed):], seed)
+		fillInitialState(state, cfg.seed, sentinels.Begin)
 
-		for _, tok := range cfg.seed {
-			if tok != sentinels.Begin && tok != sentinels.End {
-				if needHistory {
-					history = append(history, tok)
-				}
-				if !yield(tok, nil) {
-					return
-				}
-			}
+		var keepGoing bool
+		history, keepGoing = emitSeed(cfg.seed, sentinels, history, needHistory, yield)
+		if !keepGoing {
+			return
 		}
 
 		for {

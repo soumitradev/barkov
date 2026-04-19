@@ -51,6 +51,66 @@ func (a *keyArena) Append(b []byte) string {
 	return unsafe.String(&a.cur[start], need)
 }
 
+// keyStream wraps the arena + append-encoder plumbing that every
+// string-keyed corpus scan uses (BuildRaw, BuildCompressed, NGramSet).
+// Callers call probe(window) to get an ephemeral map key, and — on
+// cache miss — intern(probeKey) to upgrade it to a stable heap-backed
+// key. When the encoder does not implement AppendEncoder, probe falls
+// back to the per-call Encode path and intern is a no-op.
+//
+// It holds no per-observation state beyond the scratch buffer, so each
+// probe call overwrites the previous probe's bytes. Callers must not
+// reuse an old probe string after a subsequent probe.
+type keyStream[T comparable] struct {
+	appendEnc AppendEncoder[T]
+	encoder   StateEncoder[T]
+	hasAppend bool
+	scratch   []byte
+	arena     *keyArena
+}
+
+// newKeyStream builds a stream for encoder. arenaCapHint is the initial
+// capacity the arena should size itself for; honoured only when the
+// encoder supplies an AppendEncoder fast path.
+func newKeyStream[T comparable](encoder StateEncoder[T], arenaCapHint int) *keyStream[T] {
+	appendEnc, hasAppend := any(encoder).(AppendEncoder[T])
+	ks := &keyStream[T]{
+		encoder:   encoder,
+		appendEnc: appendEnc,
+		hasAppend: hasAppend,
+	}
+	if hasAppend {
+		ks.scratch = make([]byte, 0, 256)
+		ks.arena = newKeyArena(arenaCapHint)
+	}
+	return ks
+}
+
+// probe returns a string key for the given window. In the AppendEncoder
+// fast path the bytes live in an internal scratch buffer and are valid
+// only until the next probe call; use the string just long enough to
+// probe a map, and call intern to keep a copy. In the plain-encoder
+// fallback the returned string is already heap-backed.
+func (ks *keyStream[T]) probe(window []T) string {
+	if ks.hasAppend {
+		ks.scratch = ks.scratch[:0]
+		ks.scratch = ks.appendEnc.AppendEncoded(ks.scratch, window)
+		return unsafe.String(unsafe.SliceData(ks.scratch), len(ks.scratch))
+	}
+	return ks.encoder.Encode(window)
+}
+
+// intern promotes the current probe bytes to a stable, heap-backed key
+// safe to store long-term. Pass the most recent probe return value as
+// probeKey; when the plain-encoder path is active intern is a no-op
+// and returns probeKey unchanged.
+func (ks *keyStream[T]) intern(probeKey string) string {
+	if ks.hasAppend {
+		return ks.arena.Append(ks.scratch)
+	}
+	return probeKey
+}
+
 // Compile-time check that Chain implements GenerativeChain.
 var _ GenerativeChain[string] = (*Chain[string])(nil)
 
@@ -92,9 +152,9 @@ func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 	}
 }
 
-// BuildRaw constructs the chain from a pre-encoded corpus. Unlike Build,
-// it does not convert from strings — the corpus is already in the target
-// token type T. This is the canonical, generic build path.
+// BuildRaw constructs the chain from a pre-encoded corpus. The corpus
+// is already in the target token type T — no string conversion happens.
+// This is the canonical, generic build path.
 //
 // When the encoder implements AppendEncoder[T], BuildRaw uses a
 // zero-allocation scratch buffer and arena-interned map keys, dropping
@@ -115,61 +175,30 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	}
 	items := make([]T, 0, c.stateSize+maxLen+1)
 
-	if appendEnc, ok := any(c.encoder).(AppendEncoder[T]); ok {
-		// Fast path: encoder supports zero-alloc append. Each observation
-		// encodes the state into a reusable scratch buffer and probes the
-		// map using an unsafe string view over that scratch — nothing is
-		// allocated if the state has been seen. Only the first time a
-		// state is observed do we publish the key bytes into the arena.
-		// See BuildCompressed: totalObs/4 undershoots actual unique states by
-		// ~3.3x on typical corpora.
-		estUnique := totalObs + 64
-		arena := newKeyArena(estUnique * c.stateSize * 8)
-		scratch := make([]byte, 0, 256)
-		if len(c.Model) == 0 {
-			c.Model = make(map[string]map[T]uint32, estUnique)
-		}
+	// totalObs/4 undershoots actual unique states by ~3.3x on typical
+	// corpora; size eagerly to skip map rehashes.
+	estUnique := totalObs + 64
+	if len(c.Model) == 0 {
+		c.Model = make(map[string]map[T]uint32, estUnique)
+	}
+	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
 
-		for _, run := range corpus {
-			items = items[:0]
-			items = append(items, beginSeq...)
-			items = append(items, run...)
-			items = append(items, c.sentinels.End)
+	for _, run := range corpus {
+		items = items[:0]
+		items = append(items, beginSeq...)
+		items = append(items, run...)
+		items = append(items, c.sentinels.End)
 
-			for i := 0; i < len(run)+1; i++ {
-				scratch = scratch[:0]
-				scratch = appendEnc.AppendEncoded(scratch, items[i:i+c.stateSize])
-				follow := items[i+c.stateSize]
-
-				tempKey := unsafe.String(unsafe.SliceData(scratch), len(scratch))
-				if inner, ok := c.Model[tempKey]; ok {
-					inner[follow]++
-					continue
-				}
-				stableKey := arena.Append(scratch)
-				inner := make(map[T]uint32, 2)
-				c.Model[stableKey] = inner
+		for i := 0; i < len(run)+1; i++ {
+			probeKey := ks.probe(items[i : i+c.stateSize])
+			follow := items[i+c.stateSize]
+			if inner, ok := c.Model[probeKey]; ok {
 				inner[follow]++
+				continue
 			}
-		}
-	} else {
-		for _, run := range corpus {
-			items = items[:0]
-			items = append(items, beginSeq...)
-			items = append(items, run...)
-			items = append(items, c.sentinels.End)
-
-			for i := 0; i < len(run)+1; i++ {
-				state := c.encoder.Encode(items[i : i+c.stateSize])
-				follow := items[i+c.stateSize]
-
-				inner, ok := c.Model[state]
-				if !ok {
-					inner = make(map[T]uint32, 2)
-					c.Model[state] = inner
-				}
-				inner[follow]++
-			}
+			inner := make(map[T]uint32, 2)
+			c.Model[ks.intern(probeKey)] = inner
+			inner[follow]++
 		}
 	}
 
@@ -190,8 +219,7 @@ func (c *Chain[T]) precomputeBeginState() {
 
 // Implements GenerativeChain[T].
 func (c *Chain[T]) StateSize() int           { return c.stateSize }
-func (c *Chain[T]) MaxOverlap() int          { return c.stateSize + 2 }
-func (c *Chain[T]) Sentinels() Sentinels[T] { return c.sentinels }
+func (c *Chain[T]) Sentinels() Sentinels[T]  { return c.sentinels }
 func (c *Chain[T]) Encoder() StateEncoder[T] { return c.encoder }
 
 // Move transitions from a state to a randomly chosen next token.
@@ -365,14 +393,12 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 	estUnique := totalObs + 64
 	stateIdx := make(map[string]uint32, estUnique)
 	stateKeys := make([]string, 0, estUnique)
-	arena := newKeyArena(estUnique * c.stateSize * 8)
-	scratch := make([]byte, 0, 256)
 	items := make([]T, 0, c.stateSize+maxLen+1)
 
 	pendingState := make([]uint32, 0, totalObs)
 	pendingTok := make([]T, 0, totalObs)
 
-	appendEnc, hasAppend := any(c.encoder).(AppendEncoder[T])
+	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
 
 	for _, run := range corpus {
 		items = items[:0]
@@ -381,31 +407,14 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 		items = append(items, c.sentinels.End)
 
 		for i := 0; i < len(run)+1; i++ {
-			var idx uint32
+			probeKey := ks.probe(items[i : i+c.stateSize])
 			follow := items[i+c.stateSize]
-			if hasAppend {
-				scratch = scratch[:0]
-				scratch = appendEnc.AppendEncoded(scratch, items[i:i+c.stateSize])
-				tempKey := unsafe.String(unsafe.SliceData(scratch), len(scratch))
-				existing, ok := stateIdx[tempKey]
-				if ok {
-					idx = existing
-				} else {
-					stableKey := arena.Append(scratch)
-					idx = uint32(len(stateKeys))
-					stateIdx[stableKey] = idx
-					stateKeys = append(stateKeys, stableKey)
-				}
-			} else {
-				key := c.encoder.Encode(items[i : i+c.stateSize])
-				existing, ok := stateIdx[key]
-				if ok {
-					idx = existing
-				} else {
-					idx = uint32(len(stateKeys))
-					stateIdx[key] = idx
-					stateKeys = append(stateKeys, key)
-				}
+			idx, ok := stateIdx[probeKey]
+			if !ok {
+				idx = uint32(len(stateKeys))
+				stableKey := ks.intern(probeKey)
+				stateIdx[stableKey] = idx
+				stateKeys = append(stateKeys, stableKey)
 			}
 			pendingState = append(pendingState, idx)
 			pendingTok = append(pendingTok, follow)
@@ -499,7 +508,6 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 
 // Implements GenerativeChain[T].
 func (cc *CompressedChain[T]) StateSize() int           { return cc.stateSize }
-func (cc *CompressedChain[T]) MaxOverlap() int          { return cc.stateSize + 2 }
 func (cc *CompressedChain[T]) Sentinels() Sentinels[T]  { return cc.sentinels }
 func (cc *CompressedChain[T]) Encoder() StateEncoder[T] { return cc.encoder }
 
@@ -539,10 +547,4 @@ func InitChain(stateSize int) *Chain[string] {
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
 		Encoder:   SepEncoder{Sep: SEP},
 	})
-}
-
-// Build constructs the chain from a corpus. This is a convenience wrapper
-// around BuildRaw for backwards compatibility with the original API.
-func (c *Chain[T]) Build(corpus [][]T) *Chain[T] {
-	return c.BuildRaw(corpus)
 }

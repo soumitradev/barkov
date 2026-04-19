@@ -59,12 +59,13 @@ v2:
 ```go
 type GenerativeChain[T comparable] interface {
     StateSize() int
-    MaxOverlap() int
     Sentinels() Sentinels[T]
     Encoder() StateEncoder[T]
     Move(state string) (T, error)
 }
 ```
+
+`MaxOverlap` is no longer on the interface. Gen computes the validator window as `StateSize()+2` directly, which is what every built-in chain returned anyway. Custom `GenerativeChain` implementations can drop the method.
 
 ## Model storage
 
@@ -159,8 +160,10 @@ import "github.com/soumitradev/barkov/v2/interned"
 
 vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-compressed := interned.BuildCompressedIndexed(encoded) // stateSize=4; use BuildCompressedIndexedN for N∈2..8
+compressed := interned.BuildCompressedIndexed(4, corpus) // stateSize 2..8
 ```
+
+`BuildCompressedIndexed` now takes `(stateSize, corpus)` and returns a `GenerativeChain[TokenID]`. If you called `interned.BuildCompressedIndexed(encoded)` in an earlier v2 beta, update to `interned.BuildCompressedIndexed(4, encoded)`, or call `BuildCompressedIndexed4(encoded)` directly if you need the concrete `*IndexedCompressedChain4` type (e.g. to reach `SetRNG` or `MoveKey`). The `IndexedCompressedChain` unsuffixed type alias is gone — use `IndexedCompressedChain4`.
 
 ## Stuck detector moved to a subpackage
 
@@ -208,7 +211,7 @@ type AppendEncoder[T comparable] interface {
 }
 ```
 
-The default for string chains is `SepEncoder{Sep: SEP}` and matches the old behaviour byte for byte. `ConstructState` / `DeconstructState` are retained for backward compatibility.
+The default for string chains is `SepEncoder{Sep: SEP}` and matches the old behaviour byte for byte. The v1 package-level `ConstructState` / `DeconstructState` helpers are gone; use `SepEncoder{Sep: SEP}.Encode(tokens)` / `.Decode(state)` instead (identical output).
 
 ## Sentinels are configurable
 
@@ -228,3 +231,6 @@ For string chains `InitChain` picks sensible defaults (`"</BEGIN/>"`, `"</END/>"
 - `barkov.GenWithStart`, `GenPruned`, `GenPrunedWithStart`, `GenThreaded`, `GenThreadedWithStart` — collapsed into `Gen(ctx, chain, opts...)`.
 - `Result` struct — unused.
 - `State` type alias — it was `string`; v2 uses `string` directly.
+- `Chain[T].Build` — was a backcompat alias for `BuildRaw`. Call `BuildRaw` directly.
+- `ConstructState` / `DeconstructState` — replaced by `SepEncoder{Sep: SEP}.Encode` / `.Decode`.
+- `interned.IndexedCompressedChain` type alias — use `IndexedCompressedChain4` for the concrete N=4 type, or take the interface from `BuildCompressedIndexed(stateSize, corpus)`.

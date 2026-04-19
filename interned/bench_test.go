@@ -14,7 +14,7 @@ import (
 )
 
 var internedCorpus [][]string
-var internedCompressed *interned.IndexedCompressedChain
+var internedCompressed *interned.IndexedCompressedChain4
 
 func init() {
 	f, err := os.Open("../testdata/corpus_public.txt")
@@ -37,11 +37,11 @@ func init() {
 
 	vocab := interned.NewVocabulary()
 	encoded := vocab.InternCorpus(internedCorpus)
-	internedCompressed = interned.BuildCompressedIndexed(encoded)
+	internedCompressed = interned.BuildCompressedIndexed4(encoded)
 }
 
 // BenchmarkGenHeavyInterned amortises b.Loop overhead across many Gens to
-// isolate per-Move cost on the IndexedCompressedChain (stateSize=4) path.
+// isolate per-Move cost on the IndexedCompressedChain4 path.
 // Mirrors BenchmarkGenHeavy on the root package but against the interned
 // max-opt build. Seeded PCG so workload per iter is byte-identical.
 func BenchmarkGenHeavyInterned(b *testing.B) {

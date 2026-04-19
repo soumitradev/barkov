@@ -179,7 +179,7 @@ func TestBuildCompressedEquivalence(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := InitChain(4).Build(tc.corpus).Compress()
+			a := InitChain(4).BuildRaw(tc.corpus).Compress()
 			b := InitChain(4).BuildCompressed(tc.corpus)
 
 			if len(a.Model) != len(b.Model) {
@@ -256,7 +256,7 @@ func TestPrune(t *testing.T) {
 		{"a", "b", "c", "common", "z"},
 		{"a", "b", "c", "rare", "q"},
 	}
-	chain := InitChain(3).Build(corpus)
+	chain := InitChain(3).BuildRaw(corpus)
 
 	stateABC := SepEncoder{Sep: SEP}.Encode([]string{"a", "b", "c"})
 	if chain.Model[stateABC]["common"] != 3 || chain.Model[stateABC]["rare"] != 1 {
@@ -280,7 +280,7 @@ func TestPrune(t *testing.T) {
 
 func TestPruneNoop(t *testing.T) {
 	corpus := [][]string{{"a", "b", "c", "d"}}
-	chain := InitChain(2).Build(corpus)
+	chain := InitChain(2).BuildRaw(corpus)
 	sizeBefore := len(chain.Model)
 	chain.Prune(1)
 	if len(chain.Model) != sizeBefore {

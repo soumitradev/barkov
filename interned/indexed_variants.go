@@ -5,11 +5,11 @@ package interned
 // FastMoverKey[[N]TokenID, TokenID] interfaces stay separate and Gen can
 // dispatch on chain.StateSize() to the matching one. All behaviour —
 // Model layout, lookup, Move(string), MoveKey, SetRNG, StateSize,
-// MaxOverlap, Sentinels, Encoder — is promoted from the embedded core.
+// Sentinels, Encoder — is promoted from the embedded core.
 //
-// IndexedCompressedChain4 and its BuildCompressedIndexed4 live in
-// indexed.go (plus the IndexedCompressedChain/BuildCompressedIndexed
-// backward-compat aliases); everything else is here.
+// IndexedCompressedChain4 and its BuildCompressedIndexed4, plus the
+// stateSize-dispatching BuildCompressedIndexed, live in indexed.go;
+// everything else is here.
 
 type IndexedCompressedChain2 struct{ *indexedCore[[2]TokenID] }
 type IndexedCompressedChain3 struct{ *indexedCore[[3]TokenID] }

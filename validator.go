@@ -24,26 +24,15 @@ func NewNGramSet[T comparable](corpus [][]T, n int, encoder StateEncoder[T]) *NG
 		}
 	}
 	grams := make(map[string]struct{}, total/2+16)
+	ks := newKeyStream(encoder, total/4*n*8+64)
 
-	if appendEnc, ok := any(encoder).(AppendEncoder[T]); ok {
-		arena := newKeyArena(total/4*n*8 + 64)
-		scratch := make([]byte, 0, 256)
-		for _, tokens := range corpus {
-			for i := 0; i <= len(tokens)-n; i++ {
-				scratch = scratch[:0]
-				scratch = appendEnc.AppendEncoded(scratch, tokens[i:i+n])
-				probe := unsafe.String(unsafe.SliceData(scratch), len(scratch))
-				if _, ok := grams[probe]; ok {
-					continue
-				}
-				grams[arena.Append(scratch)] = struct{}{}
+	for _, tokens := range corpus {
+		for i := 0; i <= len(tokens)-n; i++ {
+			probeKey := ks.probe(tokens[i : i+n])
+			if _, seen := grams[probeKey]; seen {
+				continue
 			}
-		}
-	} else {
-		for _, tokens := range corpus {
-			for i := 0; i <= len(tokens)-n; i++ {
-				grams[encoder.Encode(tokens[i:i+n])] = struct{}{}
-			}
+			grams[ks.intern(probeKey)] = struct{}{}
 		}
 	}
 	return &NGramSet[T]{grams: grams, n: n, encoder: encoder}
