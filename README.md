@@ -23,11 +23,11 @@ gen, _ := text.New(corpus) // corpus is [][]string: one message's tokens per row
 sentence, _ := gen.Sentence(context.Background())
 ```
 
-`text.New` builds the vocabulary, interns the corpus, and picks the fastest engine for you, with anti-verbatim rejection on by default so outputs don't reproduce the source verbatim. Options tune it without ceremony:
+`text.New` builds the vocabulary, interns the corpus, and picks the engine for you — a variable-order backoff chain that samples where the corpus genuinely branches and steers around verbatim reproductions during the walk. Options tune it without ceremony:
 
 ```go
 gen, _ := text.New(corpus,
-    text.Order(4),               // context window (stateSize), 2–8
+    text.Order(4),               // context scale, 2–8
     text.Timeout(5*time.Second), // per-Generate budget
     text.Threads(8),             // fan attempts out across goroutines
 )
@@ -64,6 +64,17 @@ out, err := barkov.Gen(context.Background(), compressed)
 > [!TIP]
 > `interned.Build(stateSize, encoded)` is barkov's fastest build-and-gen path at stateSizes 1–8, with lower memory on large corpora. The rest of your code is unchanged. If you need the concrete affordances, assert for the interface you want: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
 
+### Multi-order backoff: stop parroting the corpus
+
+On realistic corpora a fixed-order chain barely generates at all: at stateSize 4, ~97% of moves have exactly one possible next token, so the walk replays corpus spans verbatim with a random branch every ~9th token. `interned.BuildBackoff` fixes both halves of that problem: the walk uses the longest context with real statistical support at each step (falling back to shorter contexts where the corpus is thin, so sampling happens where the data genuinely branches), and verbatim steering filters continuations that would reproduce a corpus n-gram *during* the walk — no generate-reject-retry loop, no validator to wire up.
+
+```go
+chain := interned.BuildBackoff(interned.BackoffConfig{}, encoded) // zero value = defaults
+out, err := barkov.Gen(ctx, chain)                                // Gen/GenIter unchanged
+```
+
+The zero-value config gives MaxOrder 6, MinSupport 3, and steering at window 6. `NGramSet`/`HashNGramSet` validators with n <= MaxVerbatim are redundant under steering; `WithValidator` remains useful for everything else (profanity, length caps, POS patterns). The trade: a backoff build costs one corpus pass per order and ~4x the memory of a single-order model, and steered generation probes more tables per token — the win is that every emitted sentence is non-verbatim by construction. (`text.New` uses this engine automatically.)
+
 ### Tier 3: Custom (`examples/custom`)
 
 Bring your own token type. Implement `StateEncoder[T]` (and optionally `AppendEncoder[T]` for the zero-alloc fast path). The returned `string` is just packed bytes used as a map key.[^1]
@@ -94,7 +105,7 @@ Validators are arbitrary. You might want to write a validator to reject profanit
 - `WithNGramValidator(v)` takes a `WindowValidator` that declares its own width through `N()`, so `Gen` slides a window of exactly that size. `NGramSet` and `nhash.HashNGramSet` both satisfy it. Use it instead of hand-wiring an `NGramSet` of a non-default width into `WithValidator`, which silently never matches.
 - `WithOutputValidator(v)` runs once on the complete output, so it catches whole-sentence reproductions and the short outputs the sliding window skips. It makes generation non-streaming by definition.
 
-The `text` package wires both for you: an `nhash.HashNGramSet` at `Order+2` plus a whole-message check, so short outputs that reproduce a complete corpus message are caught too.
+The `text` package needs neither for anti-verbatim: its backoff engine steers around verbatim continuations during the walk itself, and a whole-message `WithOutputValidator` check catches short outputs that reproduce a complete corpus message.
 
 ### Anti-verbatim helpers
 
@@ -134,7 +145,7 @@ Everything concrete has an interface to swap it out.
 | --- | --- | --- |
 | `.../v2/text` | `text.New` → `Generator`: strings in, non-parroting sentences out | The common case |
 | `github.com/soumitradev/barkov/v2` | Core: `Chain[T]`, `CompressedChain[T]`, `Gen`, `GenIter`, `NGramSet[T]`, `SepEncoder` | Everything below `text` |
-| `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` for stateSizes 1–8 | Tier 2 |
+| `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` (stateSizes 1–8), `BuildBackoff` (multi-order + steering) | Tier 2 |
 | `.../v2/nhash` | `HashNGramSet[T]`: hash-keyed validator | Tier 2 with a hashed validator |
 | `.../v2/hashers` | `Hasher` interface | Implementers |
 | `.../v2/hashers/xxh3` | Default high-speed hasher (via `github.com/zeebo/xxh3`) | Tier 2 |

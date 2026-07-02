@@ -4,10 +4,11 @@
 //
 // It is to the core packages what a facade is to a toolkit. The core gives
 // you generics, pluggable encoders, and a dozen functional options; text
-// pins the token type to string, picks interned.Build as the engine, turns
-// anti-verbatim on by default, and absorbs the retry-and-timeout ceremony
-// that every real consumer ends up writing by hand. When you need control,
-// drop down: Chain() and Vocab() hand you the underlying core objects.
+// pins the token type to string, picks interned.BuildBackoff as the
+// engine (variable-order contexts with verbatim steering built into the
+// walk), and absorbs the retry-and-timeout ceremony that every real
+// consumer ends up writing by hand. When you need control, drop down:
+// Chain() and Vocab() hand you the underlying core objects.
 //
 // text imports only the standard library and barkov's own zero-dependency
 // packages, so adopting it never pulls an external module into your build.
@@ -24,7 +25,6 @@ import (
 	barkov "github.com/soumitradev/barkov/v2"
 	"github.com/soumitradev/barkov/v2/hashers/fnv"
 	"github.com/soumitradev/barkov/v2/interned"
-	"github.com/soumitradev/barkov/v2/nhash"
 )
 
 // avDefault is the sentinel config value meaning "anti-verbatim window not
@@ -55,7 +55,10 @@ func defaultConfig() config {
 // Option configures a Generator at construction time.
 type Option func(*config)
 
-// Order sets the context window (the core's stateSize), 2..8. Default 4.
+// Order sets the context scale, 2..8. Default 4. Generation uses
+// variable-length contexts up to Order+2 tokens (longest first, backing
+// off where the corpus is thin), and anti-verbatim protection defaults
+// to window Order+2.
 func Order(n int) Option { return func(c *config) { c.order = n } }
 
 // Timeout is the per-Generate time budget applied to the context. Default
@@ -63,12 +66,21 @@ func Order(n int) Option { return func(c *config) { c.order = n } }
 func Timeout(d time.Duration) Option { return func(c *config) { c.timeout = d } }
 
 // Retries is the number of generation attempts per Generate call before it
-// gives up with the last validation failure. Default 64.
+// gives up with the last validation failure. Default 64. With Threads(t)
+// each retry fans out t workers, so one Generate call can make up to
+// Retries × t generation attempts.
+//
+// Under the steered engine most verbatim rejection happens during the
+// walk itself, so far fewer retries are consumed than under a
+// generate-reject-retry loop; the default stays as headroom for steering
+// dead-ends and the whole-message check.
 func Retries(n int) Option { return func(c *config) { c.retries = n } }
 
 // Threads fans each attempt out across n goroutines (WithParallelism) and
 // takes the first result that clears the validators. Default 0 (sequential).
-// Do not combine with RNG: parallel workers share one random source.
+// Combined with Retries(r), one Generate call can make up to r × n
+// generation attempts. Do not combine with RNG: parallel workers share
+// one random source.
 func Threads(n int) Option { return func(c *config) { c.threads = n } }
 
 // AntiVerbatim sets the n-gram window for verbatim-copy rejection. Default
@@ -90,20 +102,20 @@ type Generator struct {
 	retries int
 	threads int
 
-	// ngram rejects any output window that reproduces a corpus n-gram;
-	// nil when anti-verbatim is disabled.
-	ngram *nhash.HashNGramSet[interned.TokenID]
 	// messages holds fnv digests of every complete corpus message, so a
 	// short output that reproduces a whole message is caught even when it
 	// is too short for any n-gram window. nil when anti-verbatim is disabled.
+	// (The sliding n-gram check itself is steered away inside the engine's
+	// walk; see interned.BuildBackoff.)
 	messages map[uint64]struct{}
 }
 
 // New builds a Generator from a pre-tokenized corpus (each inner slice is
 // one message's tokens — text does no tokenization itself). It builds the
-// vocabulary, interns the corpus, and constructs the fastest engine
-// internally. It returns an error on an empty or unusable corpus or an
-// invalid option.
+// vocabulary, interns the corpus, and constructs the engine internally:
+// a variable-order backoff chain that samples where the corpus genuinely
+// branches and steers around verbatim reproductions during the walk. It
+// returns an error on an empty or unusable corpus or an invalid option.
 func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	cfg := defaultConfig()
 	for _, opt := range opts {
@@ -126,13 +138,33 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 		return nil, errors.New("text: corpus has no usable messages")
 	}
 
+	// The engine's context stack reaches to Order+2 (capped at the
+	// engine's max of 8) so the steering window can cover the same
+	// Order+2 n-grams the anti-verbatim contract has always promised.
+	maxOrder := min(cfg.order+2, 8)
+	maxVerbatim := -1 // AntiVerbatim(0): steering off
+	if cfg.antiVerbatim != 0 {
+		window := cfg.antiVerbatim
+		if window == avDefault {
+			window = cfg.order + 2
+		}
+		// Steering at a window narrower than requested is strictly
+		// stronger: no verbatim R-gram implies no verbatim (R+k)-gram.
+		maxVerbatim = max(2, min(window, maxOrder))
+	}
+
 	vocab := interned.NewVocabulary()
 	encoded := vocab.InternCorpus(corpus)
-	chain := interned.Build(cfg.order, encoded)
+	chain := interned.BuildBackoff(interned.BackoffConfig{
+		MaxOrder:    maxOrder,
+		MaxVerbatim: maxVerbatim,
+	}, encoded)
 	if cfg.rng != nil {
-		if s, ok := chain.(barkov.RNGSettable); ok {
-			s.SetRNG(cfg.rng)
+		s, ok := chain.(barkov.RNGSettable)
+		if !ok {
+			return nil, errors.New("text: engine does not support RNG")
 		}
+		s.SetRNG(cfg.rng)
 	}
 
 	g := &Generator{
@@ -144,11 +176,6 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	}
 
 	if cfg.antiVerbatim != 0 {
-		window := cfg.antiVerbatim
-		if window == avDefault {
-			window = cfg.order + 2
-		}
-		g.ngram = nhash.New(encoded, window, interned.PackedEncoder{}, fnv.FNV{})
 		g.messages = buildMessageSet(encoded)
 	}
 
@@ -257,14 +284,13 @@ func (g *Generator) internSeed(words []string) []interned.TokenID {
 	return seed
 }
 
-// genOptions assembles the core generation options for one attempt.
+// genOptions assembles the core generation options for one attempt. The
+// sliding anti-verbatim check needs no option here: the backoff engine
+// steers around verbatim continuations inside the walk itself.
 func (g *Generator) genOptions(seed []interned.TokenID) []barkov.GenOption[interned.TokenID] {
-	opts := make([]barkov.GenOption[interned.TokenID], 0, 4)
+	opts := make([]barkov.GenOption[interned.TokenID], 0, 3)
 	if len(seed) > 0 {
 		opts = append(opts, barkov.WithSeed(seed))
-	}
-	if g.ngram != nil {
-		opts = append(opts, barkov.WithNGramValidator[interned.TokenID](g.ngram))
 	}
 	if g.messages != nil {
 		opts = append(opts, barkov.WithOutputValidator(g.notWholeMessage))
