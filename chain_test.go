@@ -1,9 +1,11 @@
 package barkov
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestChainBuildRaw(t *testing.T) {
@@ -250,10 +252,14 @@ func splitString(s string, sep byte) []string {
 }
 
 func TestPrune(t *testing.T) {
+	// "a b c common x" repeats so the "common" branch keeps a >=2 follower
+	// and survives the cascade; the single "rare" sentence is the low-count
+	// tail that Prune(2) drops. (Cascade behavior is covered separately by
+	// TestPruneCascadeFrictionRepro / TestPruneCascadePublicCorpus.)
 	corpus := [][]string{
 		{"a", "b", "c", "common", "x"},
-		{"a", "b", "c", "common", "y"},
-		{"a", "b", "c", "common", "z"},
+		{"a", "b", "c", "common", "x"},
+		{"a", "b", "c", "common", "x"},
 		{"a", "b", "c", "rare", "q"},
 	}
 	chain := InitChain(3).BuildRaw(corpus)
@@ -276,6 +282,11 @@ func TestPrune(t *testing.T) {
 	if _, ok := chain.Model[stateRareQ]; ok {
 		t.Errorf("state with all-pruned transitions should be removed")
 	}
+
+	// The surviving common branch leaves no dangling transitions.
+	if err := chain.Validate(); err != nil {
+		t.Errorf("pruned chain should validate cleanly, got: %v", err)
+	}
 }
 
 func TestPruneNoop(t *testing.T) {
@@ -285,5 +296,139 @@ func TestPruneNoop(t *testing.T) {
 	chain.Prune(1)
 	if len(chain.Model) != sizeBefore {
 		t.Errorf("Prune(1) should be a no-op, size changed %d -> %d", sizeBefore, len(chain.Model))
+	}
+}
+
+func TestChainValidate(t *testing.T) {
+	corpus := [][]string{
+		{"a", "b", "c", "d"},
+		{"a", "b", "c", "e"},
+	}
+	chain := InitChain(2).BuildRaw(corpus)
+
+	// A freshly built chain has no dangling transitions.
+	if err := chain.Validate(); err != nil {
+		t.Fatalf("freshly built chain should validate, got: %v", err)
+	}
+
+	// Inject a dangling transition by hand: delete a successor state that a
+	// surviving transition points at, bypassing Prune's cascade.
+	enc := SepEncoder{Sep: SEP}
+	ab := enc.Encode([]string{"a", "b"})
+	if _, ok := chain.Model[ab]["c"]; !ok {
+		t.Fatalf("test precondition: expected (a b)->c transition")
+	}
+	delete(chain.Model, enc.Encode([]string{"b", "c"})) // successor of (a b) on "c"
+
+	err := chain.Validate()
+	if err == nil {
+		t.Fatal("expected Validate to report the dangling transition")
+	}
+	if !errors.Is(err, ErrStateNotFound) {
+		t.Errorf("dangling error should wrap ErrStateNotFound, got: %v", err)
+	}
+	if !containsString(err.Error(), ab) {
+		t.Errorf("error should name the offending state, got: %s", err.Error())
+	}
+}
+
+// TestPruneCascadeFrictionRepro pins friction #3's exact shape: a
+// high-count transition whose successor state has only singleton
+// followers. Single-pass Prune deletes the successor and leaves the
+// transition dangling; the fixed-point cascade removes it instead.
+func TestPruneCascadeFrictionRepro(t *testing.T) {
+	// (a b)->c is count 5, but its successor (b c) fans out to five
+	// singleton followers, all pruned by Prune(2). A separate high-count
+	// backbone (z y x w) keeps the begin state generable.
+	corpus := [][]string{
+		{"a", "b", "c", "d1"},
+		{"a", "b", "c", "d2"},
+		{"a", "b", "c", "d3"},
+		{"a", "b", "c", "d4"},
+		{"a", "b", "c", "d5"},
+		{"z", "y", "x", "w"},
+		{"z", "y", "x", "w"},
+		{"z", "y", "x", "w"},
+	}
+	chain := InitChain(2).BuildRaw(corpus)
+	enc := SepEncoder{Sep: SEP}
+
+	ab := enc.Encode([]string{"a", "b"})
+	if chain.Model[ab]["c"] != 5 {
+		t.Fatalf("precondition: expected (a b)->c count 5, got %d", chain.Model[ab]["c"])
+	}
+
+	chain.Prune(2)
+
+	// The cascade must remove the orphaned (a b)->c transition and the
+	// emptied (a b) state rather than leaving it dangling.
+	if _, ok := chain.Model[ab]; ok {
+		t.Errorf("cascade should have removed the orphaned (a b) state")
+	}
+	if err := chain.Validate(); err != nil {
+		t.Errorf("pruned chain should have no dangling transitions, got: %v", err)
+	}
+
+	// The begin state survives via the backbone branch.
+	begin := enc.Encode([]string{BEGIN, BEGIN})
+	if _, ok := chain.Model[begin]; !ok {
+		t.Fatal("begin state should survive on the backbone branch")
+	}
+
+	// Walking the pruned chain must never fault with ErrStateNotFound.
+	compressed := chain.Compress()
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err := Gen(ctx, compressed)
+		cancel()
+		if errors.Is(err, ErrStateNotFound) {
+			t.Fatalf("Gen faulted with ErrStateNotFound on a pruned chain: %v", err)
+		}
+	}
+}
+
+// TestPruneCascadePublicCorpus is the property test: on the public corpus,
+// after Prune(k) the chain has no dangling transitions (checked two ways:
+// Validate and an independent re-walk) and Gen never faults mid-walk.
+func TestPruneCascadePublicCorpus(t *testing.T) {
+	enc := SepEncoder{Sep: SEP}
+	beginKey := enc.Encode([]string{BEGIN, BEGIN, BEGIN, BEGIN})
+
+	for _, minCount := range []uint32{2, 5} {
+		t.Run(fmt.Sprintf("minCount=%d", minCount), func(t *testing.T) {
+			chain := InitChain(4).BuildRaw(testCorpus)
+			chain.Prune(minCount)
+
+			if err := chain.Validate(); err != nil {
+				t.Fatalf("Validate reported a dangling transition after Prune(%d): %v", minCount, err)
+			}
+
+			// Independent re-walk, not routed through chain.successorKey.
+			for state, choices := range chain.Model {
+				toks := enc.Decode(state)
+				for token := range choices {
+					if token == END {
+						continue
+					}
+					succ := enc.Encode(append(append([]string{}, toks[1:]...), token))
+					if _, ok := chain.Model[succ]; !ok {
+						t.Fatalf("dangling transition from %q on %q -> %q", state, token, succ)
+					}
+				}
+			}
+
+			if _, ok := chain.Model[beginKey]; !ok {
+				t.Fatalf("begin state pruned away at minCount=%d; smoke loop needs a generable chain", minCount)
+			}
+			compressed := chain.Compress()
+			for i := 0; i < 50; i++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_, err := Gen(ctx, compressed)
+				cancel()
+				if errors.Is(err, ErrStateNotFound) {
+					t.Fatalf("Gen faulted with ErrStateNotFound after Prune(%d): %v", minCount, err)
+				}
+			}
+		})
 	}
 }

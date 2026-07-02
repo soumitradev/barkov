@@ -258,10 +258,19 @@ func (c *Chain[T]) MoveTokens(tokens []T) (T, error) {
 // On prose corpora, minCount=2 typically halves memory by removing the
 // long tail of singleton transitions (often OCR noise, typos, hapax
 // legomena) without materially changing generation quality.
+//
+// Pruning cascades: removing an emptied state can orphan transitions in
+// surviving states that pointed at it, so Prune repeats until no dangling
+// transition remains. That keeps Gen from faulting with ErrStateNotFound
+// mid-walk. Aggressive minCount can therefore cascade away large parts of
+// the chain — including the begin state — leaving a model Gen cannot start
+// from (it then returns ErrStateNotFound). Validate and a begin-state
+// presence check are the caller's preflight before Gen.
 func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
 	if minCount <= 1 {
 		return c
 	}
+	// First pass: drop low-count transitions and any state left empty.
 	for state, choices := range c.Model {
 		for token, count := range choices {
 			if count < minCount {
@@ -272,8 +281,75 @@ func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
 			delete(c.Model, state)
 		}
 	}
+
+	// Fixed-point cascade: deleting a state orphans transitions in
+	// surviving states that pointed at it. Repeatedly drop transitions
+	// whose successor state no longer exists (and any state that empties
+	// as a result) until a full pass changes nothing. Transitions to the
+	// End sentinel are terminal and never dangling.
+	for {
+		changed := false
+		for state, choices := range c.Model {
+			toks := c.encoder.Decode(state)
+			for token := range choices {
+				if token == c.sentinels.End {
+					continue
+				}
+				if _, ok := c.Model[c.successorKey(toks, token)]; !ok {
+					delete(choices, token)
+					changed = true
+				}
+			}
+			if len(choices) == 0 {
+				delete(c.Model, state)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
 	c.precomputeBeginState()
 	return c
+}
+
+// successorKey returns the encoded key of the state reached by taking
+// transition token out of the state whose decoded tokens are toks. The
+// successor of state [t0 t1 … t_{n-1}] on token x is the window shifted
+// left by one: [t1 … t_{n-1} x]. Callers must not pass the End sentinel
+// as token — transitions to End are terminal and have no successor state.
+func (c *Chain[T]) successorKey(toks []T, token T) string {
+	next := make([]T, len(toks))
+	copy(next, toks[1:])
+	next[len(next)-1] = token
+	return c.encoder.Encode(next)
+}
+
+// Validate walks the model and returns a descriptive error naming the
+// first transition whose successor state is absent (a dangling transition
+// that would fault Gen with ErrStateNotFound mid-walk), or nil if every
+// non-terminal transition resolves. The returned error wraps
+// ErrStateNotFound, so callers can errors.Is it.
+//
+// Prune's cascade already guarantees a clean graph; Validate is opt-in
+// belt-and-braces for callers who mutate Model by hand or want to assert
+// the invariant before Compress. O(states × fanout).
+func (c *Chain[T]) Validate() error {
+	for state, choices := range c.Model {
+		toks := c.encoder.Decode(state)
+		for token := range choices {
+			if token == c.sentinels.End {
+				continue
+			}
+			successor := c.successorKey(toks, token)
+			if _, ok := c.Model[successor]; !ok {
+				return fmt.Errorf("barkov: dangling transition from state %q on token %v to missing successor %q: %w",
+					state, token, successor, ErrStateNotFound)
+			}
+		}
+	}
+	return nil
 }
 
 func calculateCumDist[T comparable](next map[T]uint32) ([]T, []uint32) {
@@ -320,6 +396,11 @@ func (cc *CompressedChain[T]) SetRNG(r *rand.Rand) { cc.rng = r }
 var _ GenerativeChain[string] = (*CompressedChain[string])(nil)
 
 // Compress converts the chain to SoA layout for better cache performance.
+//
+// Compress copies transitions verbatim and does not check for dangling
+// successors; if the source Chain was mutated by hand (bypassing Prune's
+// cascade), call Validate first to catch orphaned transitions at build
+// time rather than as an ErrStateNotFound from Gen.
 func (c *Chain[T]) Compress() *CompressedChain[T] {
 	totalEntries := 0
 	for _, choices := range c.Model {
