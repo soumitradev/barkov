@@ -167,13 +167,17 @@ func genIterSingle[T comparable](
 			return
 		}
 
+		// See genIterSingleFast for the rationale on hoisting ctx.Done().
+		done := ctx.Done()
 		for {
-			select {
-			case <-ctx.Done():
-				var zero T
-				yield(zero, ctx.Err())
-				return
-			default:
+			if done != nil {
+				select {
+				case <-done:
+					var zero T
+					yield(zero, ctx.Err())
+					return
+				default:
+				}
 			}
 
 			var stateKey string
@@ -257,13 +261,24 @@ func genIterSingleFast[T comparable, K comparable](
 			return
 		}
 
+		// Hoist ctx.Done() out of the per-token loop. context.Background()
+		// (and any context with no deadline/cancellation) returns a nil
+		// channel from Done(); receiving from nil blocks forever, so the
+		// select's default arm always wins — but the select call itself
+		// still runs every token. When done == nil we skip it entirely,
+		// which is the common case (and every gen benchmark). When a real
+		// cancellable context is in play, done != nil and we keep the
+		// per-token select for responsiveness.
+		done := ctx.Done()
 		for {
-			select {
-			case <-ctx.Done():
-				var zero T
-				yield(zero, ctx.Err())
-				return
-			default:
+			if done != nil {
+				select {
+				case <-done:
+					var zero T
+					yield(zero, ctx.Err())
+					return
+				default:
+				}
 			}
 
 			// &state[0] points at stateBuf[0]; K is [stateSize]T by
