@@ -393,8 +393,12 @@ type CompressedChain[T comparable] struct {
 // deterministic benchmarks and tests; not safe for concurrent use.
 func (cc *CompressedChain[T]) SetRNG(r *rand.Rand) { cc.rng = r }
 
-// Compile-time check that CompressedChain implements GenerativeChain.
-var _ GenerativeChain[string] = (*CompressedChain[string])(nil)
+// Compile-time checks that CompressedChain implements GenerativeChain and
+// exposes its RNG override through RNGSettable.
+var (
+	_ GenerativeChain[string] = (*CompressedChain[string])(nil)
+	_ RNGSettable             = (*CompressedChain[string])(nil)
+)
 
 // Compress converts the chain to SoA layout for better cache performance.
 //

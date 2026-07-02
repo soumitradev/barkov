@@ -18,7 +18,12 @@ func TestInternedEndToEnd(t *testing.T) {
 		{"the", "quick", "cat", "jumps", "over", "the", "dog"},
 	}
 
-	chain, vocab := interned.InitChain(2)
+	vocab := interned.NewVocabulary()
+	chain := barkov.NewChain(barkov.ChainConfig[interned.TokenID]{
+		StateSize: 2,
+		Sentinels: interned.DefaultSentinels(),
+		Encoder:   interned.PackedEncoder{},
+	})
 	encoded := vocab.InternCorpus(corpus)
 	chain.BuildRaw(encoded)
 	compressed := chain.Compress()
@@ -48,7 +53,12 @@ func TestInternedWithValidator(t *testing.T) {
 		{"a", "quick", "fox", "runs"},
 	}
 
-	chain, vocab := interned.InitChain(2)
+	vocab := interned.NewVocabulary()
+	chain := barkov.NewChain(barkov.ChainConfig[interned.TokenID]{
+		StateSize: 2,
+		Sentinels: interned.DefaultSentinels(),
+		Encoder:   interned.PackedEncoder{},
+	})
 	encoded := vocab.InternCorpus(corpus)
 	chain.BuildRaw(encoded)
 	compressed := chain.Compress()

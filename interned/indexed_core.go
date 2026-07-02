@@ -10,7 +10,7 @@ import (
 )
 
 // indexedCore is the key-type-parameterised core shared by every
-// IndexedCompressedChainN. K is always a pointer-free fixed-size array
+// indexedChainN. K is always a pointer-free fixed-size array
 // type (e.g. [4]TokenID) so the state map's bucket array is invisible to
 // the GC — mark cycles skip it entirely instead of walking hundreds of
 // thousands of string headers per scan.

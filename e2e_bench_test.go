@@ -84,7 +84,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := interned.BuildCompressedIndexed(4, encoded)
+			compressed := interned.Build(4, encoded)
 			barkov.Gen(ctx, compressed) //nolint
 		}
 	})
@@ -93,7 +93,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := interned.BuildCompressedIndexed(4, encoded)
+			compressed := interned.Build(4, encoded)
 			v := barkov.NewNGramSet(e2eCorpusInterned, n, packedEnc).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -103,7 +103,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := interned.BuildCompressedIndexed(4, encoded)
+			compressed := interned.Build(4, encoded)
 			v := nhash.New(e2eCorpusInterned, n, packedEnc, fnv.FNV{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -113,7 +113,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 		for b.Loop() {
 			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := interned.BuildCompressedIndexed(4, encoded)
+			compressed := interned.Build(4, encoded)
 			v := nhash.New(e2eCorpusInterned, n, packedEnc, xxh3.XXH3{}).Validator()
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
@@ -123,7 +123,7 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 // BenchmarkPipelineSimpleVsMaxOpt compares the plain string pipeline
 // against the fully-optimized pipeline at stateSize=4, no validator on
 // either side, so the delta isolates the cost of the optimization levers
-// (interning, IndexedCompressedChain) rather than mixing in validator work.
+// (interning, indexed chain) rather than mixing in validator work.
 // Numbers from this benchmark back the speedup claim in the README.
 func BenchmarkPipelineSimpleVsMaxOpt(b *testing.B) {
 	ctx := context.Background()
@@ -139,7 +139,7 @@ func BenchmarkPipelineSimpleVsMaxOpt(b *testing.B) {
 		for b.Loop() {
 			vocab := interned.NewVocabulary()
 			encoded := vocab.InternCorpus(e2eCorpus)
-			compressed := interned.BuildCompressedIndexed(4, encoded)
+			compressed := interned.Build(4, encoded)
 			barkov.Gen(ctx, compressed) //nolint
 		}
 	})
@@ -156,7 +156,7 @@ func BenchmarkThreadedVsSequential(b *testing.B) {
 
 	vocab := interned.NewVocabulary()
 	encoded := vocab.InternCorpus(e2eCorpus)
-	compressed := interned.BuildCompressedIndexed(4, encoded)
+	compressed := interned.Build(4, encoded)
 	v := nhash.New(encoded, n, packedEnc, xxh3.XXH3{}).Validator()
 
 	b.Run("sequential", func(b *testing.B) {

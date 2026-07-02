@@ -216,10 +216,21 @@ import "github.com/soumitradev/barkov/v2/interned"
 
 vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-compressed := interned.BuildCompressedIndexed(4, corpus) // stateSize 2..8
+compressed := interned.Build(4, encoded) // stateSize 2..8
 ```
 
-`BuildCompressedIndexed` now takes `(stateSize, corpus)` and returns a `GenerativeChain[TokenID]`. If you called `interned.BuildCompressedIndexed(encoded)` in an earlier v2 beta, update to `interned.BuildCompressedIndexed(4, encoded)`, or call `BuildCompressedIndexed4(encoded)` directly if you need the concrete `*IndexedCompressedChain4` type (e.g. to reach `SetRNG` or `MoveKey`). The `IndexedCompressedChain` unsuffixed type alias is gone — use `IndexedCompressedChain4`.
+`interned.Build(stateSize, corpus)` returns a `GenerativeChain[TokenID]` and is the single entry point for stateSizes 2..8. The per-N types and constructors (`IndexedCompressedChain4`, `BuildCompressedIndexed4`, and the `BuildCompressedIndexed` dispatcher) are gone. If you need the concrete affordances, assert for the interface: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
+
+`interned.InitChain(stateSize)` (the `(*Chain[TokenID], *Vocabulary)` tuple) is also removed. Build the pieces directly:
+
+```go
+vocab := interned.NewVocabulary()
+chain := barkov.NewChain(barkov.ChainConfig[interned.TokenID]{
+    StateSize: 4,
+    Sentinels: interned.DefaultSentinels(),
+    Encoder:   interned.PackedEncoder{},
+})
+```
 
 ## Stuck detector moved to a subpackage
 
@@ -289,4 +300,4 @@ For string chains `InitChain` picks sensible defaults (`"</BEGIN/>"`, `"</END/>"
 - `State` type alias — it was `string`; v2 uses `string` directly.
 - `Chain[T].Build` — was a backcompat alias for `BuildRaw`. Call `BuildRaw` directly.
 - `ConstructState` / `DeconstructState` — replaced by `SepEncoder{Sep: SEP}.Encode` / `.Decode`.
-- `interned.IndexedCompressedChain` type alias — use `IndexedCompressedChain4` for the concrete N=4 type, or take the interface from `BuildCompressedIndexed(stateSize, corpus)`.
+- `interned.IndexedCompressedChain*` per-N types, `BuildCompressedIndexed*` constructors, and `interned.InitChain` — collapsed into `interned.Build(stateSize, corpus)`, which returns a `GenerativeChain[TokenID]`. Reach concrete behavior through `barkov.RNGSettable` / `barkov.FastMoverKey` assertions.

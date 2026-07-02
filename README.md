@@ -8,7 +8,7 @@ A Markov chain text generator. Heavily inspired by https://github.com/jsvine/mar
 
 For simple use, the core string chain is three lines of setup and fast enough for most corpora.
 
-When performance and memory matter more, opt into token interning via the `interned` package. `interned.BuildCompressedIndexed(stateSize, encoded)` is a drop-in build step for any stateSize in 2–8; the `Gen` / `GenIter` call site downstream is unchanged. We've observed this path running roughly 1.7x faster and using about 35% less memory than the plain string chain on a full-length novel (~630k tokens) (see `benchstat/pipeline_simple_vs_maxopt.txt`).
+When performance and memory matter more, opt into token interning via the `interned` package. `interned.Build(stateSize, encoded)` is a drop-in build step for any stateSize in 2–8; the `Gen` / `GenIter` call site downstream is unchanged. We've observed this path running roughly 1.7x faster and using about 35% less memory than the plain string chain on a full-length novel (~630k tokens) (see `benchstat/pipeline_simple_vs_maxopt.txt`).
 
 ## Installation
 
@@ -34,15 +34,15 @@ out, err := barkov.Gen(context.Background(), chain)
 Same surface, with token interning and packed state keys for a faster build path and lower memory footprint.
 
 ```go
-chain, vocab := interned.InitChain(4)
+vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-compressed := chain.BuildCompressed(encoded)
+compressed := interned.Build(4, encoded) // fastest build-and-gen path, stateSize 2–8
 
 out, err := barkov.Gen(context.Background(), compressed)
 ```
 
 > [!TIP]
-> For the specialized fast path at stateSizes 2–8, swap `chain.BuildCompressed(encoded)` for `interned.BuildCompressedIndexed(stateSize, encoded)`. This is barkov's fastest build-and-gen path, with lower memory on large corpora. The rest of your code is unchanged. If you need the concrete type (e.g. for `SetRNG` or direct `MoveKey`), call `BuildCompressedIndexedN` directly.
+> `interned.Build(stateSize, encoded)` is barkov's fastest build-and-gen path at stateSizes 2–8, with lower memory on large corpora. The rest of your code is unchanged. If you need the concrete affordances, assert for the interface you want: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
 
 ### Tier 3: Custom (`examples/custom`)
 
@@ -97,13 +97,14 @@ Everything concrete has an interface to swap it out.
 | `stuck.Cache` retry detector | `StuckDetector` interface; nil disables |
 | `sync.Pool` slice reuse | `SlicePool[T]` interface; default `NoPool` (no reuse) |
 | `Chain` struct itself | `GenerativeChain[T]` interface with exported `Move` |
+| `interned.Build`'s concrete indexed type | Assert `barkov.RNGSettable` (SetRNG) or `barkov.FastMoverKey[[N]TokenID, TokenID]` (direct MoveKey) |
 
 ## Subpackages
 
 | Path | What it gives you | Needed for |
 | --- | --- | --- |
 | `github.com/soumitradev/barkov/v2` | Core: `Chain[T]`, `CompressedChain[T]`, `Gen`, `GenIter`, `NGramSet[T]`, `SepEncoder` | Everything |
-| `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `IndexedCompressedChainN` for stateSizes 2–8 | Tier 2 |
+| `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` for stateSizes 2–8 | Tier 2 |
 | `.../v2/nhash` | `HashNGramSet[T]`: hash-keyed validator | Tier 2 with a hashed validator |
 | `.../v2/hashers` | `Hasher` interface | Implementers |
 | `.../v2/hashers/xxh3` | Default high-speed hasher (via `github.com/zeebo/xxh3`) | Tier 2 |
@@ -122,7 +123,7 @@ Allocations per op go up on the interned path because interning has fixed per-bu
 ## Compatibility
 
 > [!IMPORTANT]
-> If you're on `v1.x`, upgrade. On the same corpus, we've observed the `v2.x` best-case pipeline via `interned.BuildCompressedIndexed` running roughly 4.8x faster, using about 4x less memory, and allocating ~57x fewer times per op than `v1.0.3`. See `benchstat/v1_vs_v2.txt`. `MIGRATION.md` has before/after snippets for every API change.
+> If you're on `v1.x`, upgrade. On the same corpus, we've observed the `v2.x` best-case pipeline via `interned.Build` running roughly 4.8x faster, using about 4x less memory, and allocating ~57x fewer times per op than `v1.0.3`. See `benchstat/v1_vs_v2.txt`. `MIGRATION.md` has before/after snippets for every API change.
 
 `v1.x` (the pre-generics string-only API) lives on `main`, feature-frozen at `v1.0.3`; critical bug fixes only.
 

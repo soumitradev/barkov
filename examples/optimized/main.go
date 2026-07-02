@@ -38,7 +38,12 @@ func main() {
 		strings.Fields("a lazy fox sleeps under the warm sun all day long"),
 	}
 
-	chain, vocab := interned.InitChain(2)
+	vocab := interned.NewVocabulary()
+	chain := barkov.NewChain(barkov.ChainConfig[interned.TokenID]{
+		StateSize: 2,
+		Sentinels: interned.DefaultSentinels(),
+		Encoder:   interned.PackedEncoder{},
+	})
 	encoded := vocab.InternCorpus(corpus)
 	compressed := chain.BuildCompressed(encoded)
 
@@ -80,14 +85,15 @@ func main() {
 }
 
 // -----------------------------------------------------------------------
-// For stateSizes 2–8, swap the build line for the indexed builder. On
-// large corpora we've observed this path running roughly 1.7x faster
-// and using about 35% less memory than the generic build path (see
+// For stateSizes 2–8, swap the build line for interned.Build. On large
+// corpora we've observed this path running roughly 1.7x faster and using
+// about 35% less memory than the generic build path (see
 // benchstat/pipeline_simple_vs_maxopt.txt). Everything downstream keeps
-// working unchanged. If you need the concrete type (e.g. for SetRNG or
-// direct MoveKey), call BuildCompressedIndexedN instead.
+// working unchanged. If you need the concrete affordances, assert for the
+// interface you want (SetRNG via barkov.RNGSettable, direct MoveKey via
+// barkov.FastMoverKey[[N]TokenID, TokenID]).
 //
-//	indexed := interned.BuildCompressedIndexed(4, encoded) // stateSize 2..8
-//	// indexed := interned.BuildCompressedIndexed5(encoded) // concrete N=5
+//	indexed := interned.Build(4, encoded) // stateSize 2..8
+//	indexed.(barkov.RNGSettable).SetRNG(r)
 //	barkov.Gen(ctx, indexed, barkov.WithValidator(validator))
 // -----------------------------------------------------------------------

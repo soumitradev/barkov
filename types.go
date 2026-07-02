@@ -1,5 +1,7 @@
 package barkov
 
+import "math/rand/v2"
+
 const BEGIN = "</BEGIN/>"
 const SEP = "</SEP/>"
 const END = "</END/>"
@@ -28,6 +30,16 @@ type GenerativeChain[T comparable] interface {
 type FastMoverKey[K, T comparable] interface {
 	MoveKey(key K) (T, error)
 }
+
+// RNGSettable is implemented by chain types whose random source can be
+// overridden for deterministic tests and benchmarks. CompressedChain and
+// the interned package's indexed chains satisfy it; assert for it when you
+// hold a chain as a GenerativeChain interface:
+//
+//	if s, ok := chain.(barkov.RNGSettable); ok {
+//		s.SetRNG(rand.New(rand.NewPCG(1, 2)))
+//	}
+type RNGSettable interface{ SetRNG(r *rand.Rand) }
 
 type errorCause string
 

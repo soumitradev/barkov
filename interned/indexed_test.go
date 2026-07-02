@@ -3,10 +3,12 @@ package interned
 import (
 	"testing"
 	"unsafe"
+
+	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// TestIndexedEquivalence asserts that every per-N BuildCompressedIndexedN
-// produces the same per-state token distributions as the string-keyed
+// TestIndexedEquivalence asserts that every per-N indexed build produces
+// the same per-state token distributions as the string-keyed
 // Chain[TokenID].BuildCompressed at the matching stateSize. Since the
 // indexed Model is keyed by [N]TokenID and the baseline Model by a
 // packed-encoder string, we bridge the two by reinterpreting the string
@@ -35,7 +37,11 @@ func checkIndexedEquiv[K comparable](t *testing.T, stateSize int, corpus [][]str
 	vocab := NewVocabulary()
 	encoded := vocab.InternCorpus(corpus)
 
-	chain, _ := InitChain(stateSize)
+	chain := barkov.NewChain(barkov.ChainConfig[TokenID]{
+		StateSize: stateSize,
+		Sentinels: DefaultSentinels(),
+		Encoder:   PackedEncoder{},
+	})
 	baseline := chain.BuildCompressed(encoded)
 	indexed := buildIndexedCore[K](encoded)
 
