@@ -6,9 +6,7 @@ A Markov chain text generator. Heavily inspired by https://github.com/jsvine/mar
 
 > This implementation is quite barebones and does not come with tokenization or validation code. You can choose to tokenize your text however you want, and validate a sentence in whichever way you see fit. If you don't want to use the chain struct that I've defined, and want to use your own, fine, there's a `GenerativeChain` interface you need to satisfy.
 
-For simple use, the core string chain is three lines of setup and fast enough for most corpora.
-
-When performance and memory matter more, opt into token interning via the `interned` package. `interned.Build(stateSize, encoded)` is a drop-in build step for any stateSize in 2–8; the `Gen` / `GenIter` call site downstream is unchanged. We've observed this path running roughly 1.7x faster and using about 35% less memory than the plain string chain on a full-length novel (~630k tokens) (see `benchstat/pipeline_simple_vs_maxopt.txt`).
+Barkov is layered like zap: a sugared `text` package for the common case — tokenized messages in, non-parroting sentences out — sitting over an unsugared core of generics, pluggable encoders, and functional options for when you need control. Reach for `text` first; drop to the core when you outgrow it.
 
 ## Installation
 
@@ -16,9 +14,31 @@ When performance and memory matter more, opt into token interning via the `inter
 go get github.com/soumitradev/barkov/v2
 ```
 
-## Three tiers of usage
+## Quick start
 
-The API is layered so that each tier can use only what it needs. Runnable examples are in `examples/`.
+Three lines from a tokenized corpus to sentences that don't parrot the source:
+
+```go
+gen, _ := text.New(corpus) // corpus is [][]string: one message's tokens per row
+sentence, _ := gen.Sentence(context.Background())
+```
+
+`text.New` builds the vocabulary, interns the corpus, and picks the fastest engine for you, with anti-verbatim rejection on by default so outputs don't reproduce the source verbatim. Options tune it without ceremony:
+
+```go
+gen, _ := text.New(corpus,
+    text.Order(4),               // context window (stateSize), 2–8
+    text.Timeout(5*time.Second), // per-Generate budget
+    text.Threads(8),             // fan attempts out across goroutines
+)
+out, _ := gen.Generate(ctx, text.Seed([]string{"once", "upon"}))
+```
+
+When you outgrow the facade, `gen.Chain()` and `gen.Vocab()` hand you the underlying core objects to use with everything below. Full example: `examples/text`.
+
+## When you need control: three tiers
+
+Drop below `text` for a custom token type, your own validator, or direct access to the chain. The core API is layered so each tier uses only what it needs. Runnable examples are in `examples/`.
 
 ### Tier 1: Drop-in (`examples/simple`)
 
@@ -67,6 +87,15 @@ A validator is any function `func([]T) bool`. `Gen` calls it on each candidate n
 
 Validators are arbitrary. You might want to write a validator to reject profanity, cap sentence length, block specific tokens, enforce POS patterns etc.
 
+### Validator shapes
+
+`WithValidator` slides a fixed `StateSize+2` window: outputs shorter than that are never checked, and the width is fixed regardless of how the validator was built. Two options remove those footguns:
+
+- `WithNGramValidator(v)` takes a `WindowValidator` that declares its own width through `N()`, so `Gen` slides a window of exactly that size. `NGramSet` and `nhash.HashNGramSet` both satisfy it. Use it instead of hand-wiring an `NGramSet` of a non-default width into `WithValidator`, which silently never matches.
+- `WithOutputValidator(v)` runs once on the complete output, so it catches whole-sentence reproductions and the short outputs the sliding window skips. It makes generation non-streaming by definition.
+
+The `text` package wires both for you: an `nhash.HashNGramSet` at `Order+2` plus a whole-message check, so short outputs that reproduce a complete corpus message are caught too.
+
 ### Anti-verbatim helpers
 
 The single most common validator is anti-verbatim: reject any output that reproduces a corpus n-gram exactly. This matters when you're publishing derivative text and an accidental verbatim reproduction would defeat the point.
@@ -103,7 +132,8 @@ Everything concrete has an interface to swap it out.
 
 | Path | What it gives you | Needed for |
 | --- | --- | --- |
-| `github.com/soumitradev/barkov/v2` | Core: `Chain[T]`, `CompressedChain[T]`, `Gen`, `GenIter`, `NGramSet[T]`, `SepEncoder` | Everything |
+| `.../v2/text` | `text.New` → `Generator`: strings in, non-parroting sentences out | The common case |
+| `github.com/soumitradev/barkov/v2` | Core: `Chain[T]`, `CompressedChain[T]`, `Gen`, `GenIter`, `NGramSet[T]`, `SepEncoder` | Everything below `text` |
 | `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` for stateSizes 2–8 | Tier 2 |
 | `.../v2/nhash` | `HashNGramSet[T]`: hash-keyed validator | Tier 2 with a hashed validator |
 | `.../v2/hashers` | `Hasher` interface | Implementers |

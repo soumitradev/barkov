@@ -2,6 +2,62 @@
 
 Every public API change from `v1.0.3` to `v2.0.0`. The short version: generics, functional gen options, and a subpackage split.
 
+If you already migrated to `v2.0.0-beta.6`, the [beta.6 → beta.7 section](#upgrading-within-v2-beta6--beta7) below is the only part you need; the rest is the full v1 → v2 story.
+
+## Upgrading within v2: beta.6 → beta.7
+
+beta.7 fixes three correctness holes reported from real-world use, collapses the interned surface, and adds a sugared `text` package. Most consumers touch only the first two items.
+
+**`go mod tidy` now exits 0.** The `hashers/*` packages used to be separate nested modules, so every consumer's `go mod tidy` walked into packages that don't exist inside the tagged `barkov/v2` module and exited non-zero. They are now folded into the main module. No code change; just re-run `go mod tidy`.
+
+**`text` package: the sugared entry point.** New in beta.7. Strings in, non-parroting sentences out, fastest engine and anti-verbatim wired up for you. Nothing to migrate — this is additive — but it's the recommended starting point for new code.
+
+```go
+gen, _ := text.New(corpus) // corpus [][]string
+sentence, _ := gen.Sentence(ctx)
+```
+
+**Interned surface collapsed to `Build`.** The per-N types and constructors and `interned.InitChain` are gone.
+
+Before:
+```go
+compressed := interned.BuildCompressedIndexed(4, encoded)
+// or the concrete: interned.BuildCompressedIndexed4(encoded)
+chain, vocab := interned.InitChain(4)
+```
+After:
+```go
+compressed := interned.Build(4, encoded) // stateSize 2..8, returns GenerativeChain[TokenID]
+// reach concrete behavior via interface assertion:
+compressed.(barkov.RNGSettable).SetRNG(r)
+// InitChain's job, spelled out:
+vocab := interned.NewVocabulary()
+chain := barkov.NewChain(barkov.ChainConfig[interned.TokenID]{
+    StateSize: 4, Sentinels: interned.DefaultSentinels(), Encoder: interned.PackedEncoder{},
+})
+```
+
+**Validator width and short-output holes closed.** `WithValidator` still slides a fixed `StateSize+2` window and skips shorter outputs (now documented). Two new options fix the footguns:
+
+Before:
+```go
+// silently never matches: Gen slides StateSize+2 grams, the set keys are n-sized
+set := barkov.NewNGramSet(corpus, 4, enc) // n != StateSize+2
+out, _ := barkov.Gen(ctx, chain, barkov.WithValidator(set.Validator()))
+```
+After:
+```go
+// width taken from the validator's N(); short/whole outputs covered too
+out, _ := barkov.Gen(ctx, chain,
+    barkov.WithNGramValidator(set),               // slides exactly set.N() tokens
+    barkov.WithOutputValidator(wholeSentenceOK),  // fires once on the full output
+)
+```
+
+**`Prune` no longer leaves dangling transitions.** Strictly a bugfix: single-pass `Prune` used to delete emptied states while leaving surviving transitions pointing at them, which faulted `Gen` with `ErrStateNotFound` at runtime. `Prune` now cascades to a fixed point. `Chain[T].Validate() error` is the new opt-in preflight that names the first dangling transition. Aggressive `minCount` can now legitimately cascade away large parts of the chain (including the begin state); check `Validate()` and begin-state presence before `Gen`.
+
+**CompressedChain accessors.** New: `StateTotal(state)`, `States()` iterator, `ChoicesCumDist(state)`, and `barkov.DefaultStringEncoder`. See [Common queries on CompressedChain](#common-queries-on-compressedchain) for the before/after recipes that replace raw index arithmetic.
+
 ## Module path
 
 ```
