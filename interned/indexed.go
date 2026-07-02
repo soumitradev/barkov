@@ -16,6 +16,7 @@ import (
 // (SetRNG, MoveKey) through the barkov.RNGSettable / barkov.FastMoverKey
 // interfaces rather than the concrete types.
 type (
+	indexedChain1 struct{ *indexedCore[[1]TokenID] }
 	indexedChain2 struct{ *indexedCore[[2]TokenID] }
 	indexedChain3 struct{ *indexedCore[[3]TokenID] }
 	indexedChain4 struct{ *indexedCore[[4]TokenID] }
@@ -25,7 +26,7 @@ type (
 	indexedChain8 struct{ *indexedCore[[8]TokenID] }
 )
 
-// Build constructs the fastest chain representation for stateSize 2..8
+// Build constructs the fastest chain representation for stateSize 1..8
 // from a pre-interned corpus. The caller is expected to have already run
 // the corpus through Vocabulary.InternCorpus.
 //
@@ -37,10 +38,12 @@ type (
 //	chain.(barkov.RNGSettable).SetRNG(r)                       // deterministic RNG
 //	chain.(barkov.FastMoverKey[[4]TokenID, TokenID]).MoveKey(k) // direct MoveKey
 //
-// Panics on stateSize outside 2..8 — the range matches the FastMoverKey
+// Panics on stateSize outside 1..8 — the range matches the FastMoverKey
 // dispatch in the core Gen path.
 func Build(stateSize int, corpus [][]TokenID) barkov.GenerativeChain[TokenID] {
 	switch stateSize {
+	case 1:
+		return &indexedChain1{buildIndexedCore[[1]TokenID](corpus)}
 	case 2:
 		return &indexedChain2{buildIndexedCore[[2]TokenID](corpus)}
 	case 3:
@@ -56,13 +59,15 @@ func Build(stateSize int, corpus [][]TokenID) barkov.GenerativeChain[TokenID] {
 	case 8:
 		return &indexedChain8{buildIndexedCore[[8]TokenID](corpus)}
 	default:
-		panic(fmt.Sprintf("interned: Build: stateSize %d outside supported range 2..8", stateSize))
+		panic(fmt.Sprintf("interned: Build: stateSize %d outside supported range 1..8", stateSize))
 	}
 }
 
 // Compile-time checks that every variant satisfies GenerativeChain and
 // FastMoverKey for its stateSize, and RNGSettable (identical for all N).
 var (
+	_ barkov.GenerativeChain[TokenID]          = (*indexedChain1)(nil)
+	_ barkov.FastMoverKey[[1]TokenID, TokenID] = (*indexedChain1)(nil)
 	_ barkov.GenerativeChain[TokenID]          = (*indexedChain2)(nil)
 	_ barkov.FastMoverKey[[2]TokenID, TokenID] = (*indexedChain2)(nil)
 	_ barkov.GenerativeChain[TokenID]          = (*indexedChain3)(nil)

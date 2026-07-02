@@ -126,12 +126,16 @@ func genIterSingle[T comparable](
 	cfg *genConfig[T],
 ) iter.Seq2[T, error] {
 	// Fast path for chains that implement FastMoverKey[[N]T, T] for their
-	// stateSize N ∈ 2..8: bypass encoder.Encode and Move(string) entirely
+	// stateSize N ∈ 1..8: bypass encoder.Encode and Move(string) entirely
 	// by handing the raw N-token state array to MoveKey directly.
 	// Eliminates one string allocation per generated token. Each N needs
 	// its own assertion because Go can't parameterize an interface type
 	// by an int const.
 	switch chain.StateSize() {
+	case 1:
+		if fm, ok := any(chain).(FastMoverKey[[1]T, T]); ok {
+			return genIterSingleFast[T, [1]T](ctx, chain, fm, cfg)
+		}
 	case 2:
 		if fm, ok := any(chain).(FastMoverKey[[2]T, T]); ok {
 			return genIterSingleFast[T, [2]T](ctx, chain, fm, cfg)
@@ -295,7 +299,7 @@ func genIterSingleFast[T comparable, K comparable](
 
 		// stateBuf backs the state slice on the stack. 8 is the upper
 		// bound on supported stateSize for FastMoverKey; dispatch in
-		// genIterSingle only selects this path for N ∈ 2..8.
+		// genIterSingle only selects this path for N ∈ 1..8.
 		var stateBuf [8]T
 		state := stateBuf[:stateSize]
 		fillInitialState(state, cfg.seed, sentinels.Begin)

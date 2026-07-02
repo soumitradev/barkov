@@ -56,13 +56,13 @@ Same surface, with token interning and packed state keys for a faster build path
 ```go
 vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-compressed := interned.Build(4, encoded) // fastest build-and-gen path, stateSize 2–8
+compressed := interned.Build(4, encoded) // fastest build-and-gen path, stateSize 1–8
 
 out, err := barkov.Gen(context.Background(), compressed)
 ```
 
 > [!TIP]
-> `interned.Build(stateSize, encoded)` is barkov's fastest build-and-gen path at stateSizes 2–8, with lower memory on large corpora. The rest of your code is unchanged. If you need the concrete affordances, assert for the interface you want: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
+> `interned.Build(stateSize, encoded)` is barkov's fastest build-and-gen path at stateSizes 1–8, with lower memory on large corpora. The rest of your code is unchanged. If you need the concrete affordances, assert for the interface you want: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
 
 ### Tier 3: Custom (`examples/custom`)
 
@@ -134,7 +134,7 @@ Everything concrete has an interface to swap it out.
 | --- | --- | --- |
 | `.../v2/text` | `text.New` → `Generator`: strings in, non-parroting sentences out | The common case |
 | `github.com/soumitradev/barkov/v2` | Core: `Chain[T]`, `CompressedChain[T]`, `Gen`, `GenIter`, `NGramSet[T]`, `SepEncoder` | Everything below `text` |
-| `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` for stateSizes 2–8 | Tier 2 |
+| `.../v2/interned` | `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` for stateSizes 1–8 | Tier 2 |
 | `.../v2/nhash` | `HashNGramSet[T]`: hash-keyed validator | Tier 2 with a hashed validator |
 | `.../v2/hashers` | `Hasher` interface | Implementers |
 | `.../v2/hashers/xxh3` | Default high-speed hasher (via `github.com/zeebo/xxh3`) | Tier 2 |

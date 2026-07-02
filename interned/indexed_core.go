@@ -210,6 +210,9 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			}
 		}
 
+		if fanout := len(cc.Choices) - groupStart; fanout > 65535 {
+			panic(fmt.Sprintf("interned: state fanout %d exceeds ChoicesIndex.Count capacity 65535", fanout))
+		}
 		count := uint16(len(cc.Choices) - groupStart)
 		var indexOffset uint32
 		if count == 1 {

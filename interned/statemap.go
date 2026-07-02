@@ -5,7 +5,7 @@ import (
 )
 
 // stateMap is a purpose-built open-addressed hash table keyed by a
-// pointer-free POD K (always [N]TokenID for N ∈ 2..8). It replaces
+// pointer-free POD K (always [N]TokenID for N ∈ 1..8). It replaces
 // Go's swisstable map on the gen hot path where profiling showed
 // internal/runtime/maps.ctrlGroup.matchH2 burning ~36% of total gen
 // time per probe. Linear probing with bounded load factor turns each

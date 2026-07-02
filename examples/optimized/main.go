@@ -85,7 +85,7 @@ func main() {
 }
 
 // -----------------------------------------------------------------------
-// For stateSizes 2–8, swap the build line for interned.Build. On large
+// For stateSizes 1–8, swap the build line for interned.Build. On large
 // corpora we've observed this path running roughly 1.7x faster and using
 // about 35% less memory than the generic build path (see
 // benchstat/pipeline_simple_vs_maxopt.txt). Everything downstream keeps
@@ -93,7 +93,7 @@ func main() {
 // interface you want (SetRNG via barkov.RNGSettable, direct MoveKey via
 // barkov.FastMoverKey[[N]TokenID, TokenID]).
 //
-//	indexed := interned.Build(4, encoded) // stateSize 2..8
+//	indexed := interned.Build(4, encoded) // stateSize 1..8
 //	indexed.(barkov.RNGSettable).SetRNG(r)
 //	barkov.Gen(ctx, indexed, barkov.WithValidator(validator))
 // -----------------------------------------------------------------------

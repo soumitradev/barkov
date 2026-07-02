@@ -1,6 +1,7 @@
 package interned
 
 import (
+	"context"
 	"testing"
 	"unsafe"
 
@@ -24,6 +25,7 @@ func TestIndexedEquivalence(t *testing.T) {
 		{"the", "fox", "and", "the", "dog", "are", "friends", "today"},
 	}
 
+	t.Run("N=1", func(t *testing.T) { checkIndexedEquiv[[1]TokenID](t, 1, corpus) })
 	t.Run("N=2", func(t *testing.T) { checkIndexedEquiv[[2]TokenID](t, 2, corpus) })
 	t.Run("N=3", func(t *testing.T) { checkIndexedEquiv[[3]TokenID](t, 3, corpus) })
 	t.Run("N=4", func(t *testing.T) { checkIndexedEquiv[[4]TokenID](t, 4, corpus) })
@@ -100,4 +102,38 @@ func cumDistToCounts(choices []TokenID, cumDist []uint32) map[TokenID]uint32 {
 		prev = cumDist[i]
 	}
 	return out
+}
+
+// TestBuildOrderOneEndToEnd asserts that interned.Build(1, ...) produces a
+// chain that generates non-empty, terminating output. Order 1 has the
+// widest fanout of any supported N (the begin state's followers approach
+// the count of distinct sentence starters), which is exactly the case the
+// build-time fanout panic in buildIndexedCore guards against — this test
+// exercises that path at ordinary corpus scale, well under the 65535 cap.
+func TestBuildOrderOneEndToEnd(t *testing.T) {
+	corpus := [][]string{
+		{"the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"},
+		{"the", "quick", "brown", "fox", "runs"},
+		{"the", "quick", "brown", "dog", "barks"},
+		{"a", "quick", "brown", "fox", "is", "faster", "than", "a", "lazy", "dog"},
+		{"the", "lazy", "dog", "sleeps", "all", "day", "long"},
+		{"the", "fox", "and", "the", "dog", "are", "friends", "today"},
+	}
+
+	vocab := NewVocabulary()
+	encoded := vocab.InternCorpus(corpus)
+
+	chain := Build(1, encoded)
+	out, err := barkov.Gen(context.Background(), chain)
+	if err != nil {
+		t.Fatalf("Gen returned error: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("Gen returned empty output")
+	}
+	for _, tok := range out {
+		if tok == BeginTokenID {
+			t.Errorf("generated output contains BeginTokenID sentinel: %v", out)
+		}
+	}
 }

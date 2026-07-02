@@ -22,7 +22,7 @@ type GenerativeChain[T comparable] interface {
 }
 
 // FastMoverKey is an optional optimisation interface for chains with a
-// fixed pointer-free state key K (typically [N]T for N ∈ 2..8). When Gen
+// fixed pointer-free state key K (typically [N]T for N ∈ 1..8). When Gen
 // detects it, it skips encoder.Encode + Move(string) and calls MoveKey
 // directly with the array-shaped key, eliminating one string allocation
 // per generated token. genIterSingle dispatches on chain.StateSize() and
