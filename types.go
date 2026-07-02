@@ -8,8 +8,10 @@ const END = "</END/>"
 // All methods are EXPORTED so users in other packages can implement
 // their own chain types.
 //
-// Gen computes the validator window as StateSize()+2; that policy is
-// intentionally fixed and not a knob on the interface.
+// Gen computes the validator window as StateSize()+2 by default; that
+// policy is fixed here and not a knob on the interface. Use
+// WithNGramValidator to override the width per call with a
+// WindowValidator that knows its own N().
 type GenerativeChain[T comparable] interface {
 	StateSize() int
 	Sentinels() Sentinels[T]

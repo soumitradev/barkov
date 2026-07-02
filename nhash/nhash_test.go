@@ -39,6 +39,33 @@ func TestHashNGramSetValidator(t *testing.T) {
 	}
 }
 
+func TestHashNGramSetValidateMatchesValidator(t *testing.T) {
+	corpus := [][]string{{"a", "b", "c", "d"}}
+	enc := barkov.SepEncoder{Sep: barkov.SEP}
+	s := nhash.New(corpus, 3, enc, fnv.FNV{})
+	v := s.Validator()
+
+	probes := [][]string{
+		{"a", "b", "c"},
+		{"b", "c", "d"},
+		{"x", "y", "z"},
+	}
+	for _, p := range probes {
+		if s.Validate(p) != v(p) {
+			t.Errorf("Validate(%v)=%v disagrees with Validator()(%v)=%v", p, s.Validate(p), p, v(p))
+		}
+	}
+}
+
+func TestHashNGramSetN(t *testing.T) {
+	corpus := [][]string{{"a", "b", "c", "d"}}
+	enc := barkov.SepEncoder{Sep: barkov.SEP}
+	s := nhash.New(corpus, 3, enc, fnv.FNV{})
+	if s.N() != 3 {
+		t.Errorf("expected N()=3, got %d", s.N())
+	}
+}
+
 func TestHashNGramSetSize(t *testing.T) {
 	corpus := [][]string{{"a", "b", "c", "d"}}
 	enc := barkov.SepEncoder{Sep: barkov.SEP}

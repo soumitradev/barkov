@@ -2,6 +2,14 @@ package barkov
 
 import "unsafe"
 
+// WindowValidator is a per-window validator that knows its own width.
+// Gen slides a window of exactly N() tokens, eliminating the silent
+// width mismatch that WithValidator has with hand-wired NGramSets.
+type WindowValidator[T comparable] interface {
+	Validate(gram []T) bool
+	N() int
+}
+
 // NGramSet is a string-keyed anti-verbatim validator. It uses the provided
 // StateEncoder to build map keys from n-gram slices, so it works with any
 // token type. Zero external dependencies.
@@ -68,3 +76,25 @@ func (s *NGramSet[T]) Validator() func([]T) bool {
 
 // Size returns the number of unique n-grams in the set.
 func (s *NGramSet[T]) Size() int { return len(s.grams) }
+
+// Validate implements WindowValidator[T]. Same accept-semantics as the
+// Validator() closure: true means gram is NOT a verbatim corpus n-gram.
+// Mirrors Validator()'s allocation-free append-encoder fast path rather
+// than allocating a fresh closure on every call.
+func (s *NGramSet[T]) Validate(gram []T) bool {
+	if appendEnc, ok := any(s.encoder).(AppendEncoder[T]); ok {
+		var buf [256]byte
+		scratch := appendEnc.AppendEncoded(buf[:0], gram)
+		probe := unsafe.String(unsafe.SliceData(scratch), len(scratch))
+		_, found := s.grams[probe]
+		return !found
+	}
+	_, found := s.grams[s.encoder.Encode(gram)]
+	return !found
+}
+
+// N implements WindowValidator[T], returning the n-gram width this set
+// was built with.
+func (s *NGramSet[T]) N() int { return s.n }
+
+var _ WindowValidator[string] = (*NGramSet[string])(nil)

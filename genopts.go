@@ -34,11 +34,13 @@ func (NoPool[T]) PutGenerated(*[]T)     {}
 type GenOption[T comparable] func(*genConfig[T])
 
 type genConfig[T comparable] struct {
-	seed        []T
-	validator   func([]T) bool
-	parallelism int // 0 = single-threaded; >0 = goroutine count
-	stuckCache  StuckDetector
-	pool        SlicePool[T]
+	seed            []T
+	validator       func([]T) bool
+	validatorWidth  int // window width for validator; 0 = default to StateSize+2
+	parallelism     int // 0 = single-threaded; >0 = goroutine count
+	stuckCache      StuckDetector
+	pool            SlicePool[T]
+	outputValidator func([]T) bool
 }
 
 // WithSeed prepends seed tokens to the generated sequence.
@@ -51,8 +53,37 @@ func WithSeed[T comparable](seed []T) GenOption[T] {
 // WithValidator installs an n-gram validator. The function is called
 // with the last StateSize+2 tokens after each step; returning false aborts
 // the current attempt with ErrSentenceFailedValidation.
+//
+// The window width is fixed at StateSize+2. Outputs shorter than that
+// are never passed to the validator; use WithOutputValidator to check
+// short or complete outputs.
 func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
 	return func(c *genConfig[T]) { c.validator = v }
+}
+
+// WithOutputValidator installs a whole-output validator. It is called
+// exactly once with the complete output (seed tokens plus generated,
+// sentinels excluded — the same slice Gen would return); returning false
+// aborts the attempt with ErrSentenceFailedValidation. Unlike
+// WithValidator, this also covers outputs shorter than StateSize+2.
+//
+// An output validator makes generation non-streaming by definition: the
+// single-threaded path must buffer the entire output before it can call
+// v, then replays it through the iterator.
+func WithOutputValidator[T comparable](v func([]T) bool) GenOption[T] {
+	return func(c *genConfig[T]) { c.outputValidator = v }
+}
+
+// WithNGramValidator installs a WindowValidator — a per-window validator
+// that knows its own width. Gen slides a window of exactly v.N() tokens
+// and calls v.Validate on it, eliminating the silent width mismatch that
+// WithValidator has when hand-wired to an NGramSet built with a
+// different n. T is inferred from v.
+func WithNGramValidator[T comparable](v WindowValidator[T]) GenOption[T] {
+	return func(c *genConfig[T]) {
+		c.validator = v.Validate
+		c.validatorWidth = v.N()
+	}
 }
 
 // WithThreaded fans the generation attempt out across runtime.NumCPU()*8

@@ -92,6 +92,28 @@ func (s *HashNGramSet[T]) Validator() func([]T) bool {
 // Size returns the number of unique n-grams in the set.
 func (s *HashNGramSet[T]) Size() int { return len(s.hashes) }
 
+// Validate implements barkov.WindowValidator[T]. Same accept-semantics as
+// the Validator() closure: true means gram is NOT a verbatim corpus
+// n-gram. Mirrors Validator()'s allocation-free append-encoder fast path
+// rather than allocating a fresh closure on every call.
+func (s *HashNGramSet[T]) Validate(gram []T) bool {
+	if appendEnc, ok := any(s.encoder).(barkov.AppendEncoder[T]); ok {
+		var buf [256]byte
+		scratch := appendEnc.AppendEncoded(buf[:0], gram)
+		_, found := s.hashes[s.hasher.Hash(scratch)]
+		return !found
+	}
+	key := s.encoder.Encode(gram)
+	_, found := s.hashes[hashString(s.hasher, key)]
+	return !found
+}
+
+// N implements barkov.WindowValidator[T], returning the n-gram width
+// this set was built with.
+func (s *HashNGramSet[T]) N() int { return s.n }
+
+var _ barkov.WindowValidator[string] = (*HashNGramSet[string])(nil)
+
 // hashString hashes the backing bytes of a string without copying.
 // Safe because strings are immutable and the hash is computed synchronously.
 func hashString(h hashers.Hasher, s string) uint64 {

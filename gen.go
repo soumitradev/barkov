@@ -21,9 +21,48 @@ func GenIter[T comparable](
 		opt(cfg)
 	}
 	if cfg.parallelism > 1 {
+		// genIterThreaded applies cfg.outputValidator inside each worker
+		// (see the worker loop below) rather than decorating here: the
+		// first worker to finish would otherwise win the race and then
+		// fail the whole call instead of letting other workers retry.
 		return genIterThreaded(ctx, chain, cfg)
 	}
-	return genIterSingle(ctx, chain, cfg)
+	inner := genIterSingle(ctx, chain, cfg)
+	if cfg.outputValidator != nil {
+		return validateOutputIter(inner, cfg.outputValidator)
+	}
+	return inner
+}
+
+// validateOutputIter decorates inner with a whole-output check, without
+// touching the hot loops in genIterSingle/genIterSingleFast. It buffers
+// inner's entire sequence (seed tokens plus generated, sentinels
+// excluded — exactly what Gen would return), then either yields
+// ErrSentenceFailedValidation or replays the buffered tokens. This makes
+// generation non-streaming by definition: nothing is yielded until inner
+// completes.
+func validateOutputIter[T comparable](inner iter.Seq2[T, error], v func([]T) bool) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var buf []T
+		for tok, err := range inner {
+			if err != nil {
+				var zero T
+				yield(zero, err)
+				return
+			}
+			buf = append(buf, tok)
+		}
+		if !v(buf) {
+			var zero T
+			yield(zero, fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation))
+			return
+		}
+		for _, tok := range buf {
+			if !yield(tok, nil) {
+				return
+			}
+		}
+	}
 }
 
 // Gen collects the iterator into a slice.
@@ -126,7 +165,10 @@ func genIterSingle[T comparable](
 		stateSize := chain.StateSize()
 		sentinels := chain.Sentinels()
 		encoder := chain.Encoder()
-		maxOverlap := stateSize + 2
+		maxOverlap := cfg.validatorWidth
+		if maxOverlap == 0 {
+			maxOverlap = stateSize + 2
+		}
 		// Hoisted: if the encoder supports AppendEncoder, we build the state
 		// key each step into a stack scratch buffer instead of allocating a
 		// fresh string. The resulting string is only passed to chain.Move,
@@ -233,7 +275,10 @@ func genIterSingleFast[T comparable, K comparable](
 	return func(yield func(T, error) bool) {
 		sentinels := chain.Sentinels()
 		stateSize := chain.StateSize()
-		maxOverlap := stateSize + 2
+		maxOverlap := cfg.validatorWidth
+		if maxOverlap == 0 {
+			maxOverlap = stateSize + 2
+		}
 
 		// history is only consumed by validator; skip it entirely otherwise.
 		needHistory := cfg.validator != nil
@@ -351,16 +396,15 @@ func genIterThreaded[T comparable](
 			go func() {
 				defer wg.Done()
 
-				// Build a single-threaded config for this worker
-				workerCfg := &genConfig[T]{
-					seed:      cfg.seed,
-					validator: cfg.validator,
-					pool:      cfg.pool,
-					// parallelism = 0 for single-threaded
-				}
+				// Build a single-threaded config for this worker by
+				// copying the whole struct and zeroing parallelism, so
+				// validatorWidth, outputValidator, and any future field
+				// can't be silently dropped by hand-copying fields.
+				workerCfg := *cfg
+				workerCfg.parallelism = 0
 
 				var tokens []T
-				for tok, err := range genIterSingle(workerCtx, chain, workerCfg) {
+				for tok, err := range genIterSingle(workerCtx, chain, &workerCfg) {
 					if err != nil {
 						select {
 						case resultCh <- result{err: err}:
@@ -369,6 +413,17 @@ func genIterThreaded[T comparable](
 						return
 					}
 					tokens = append(tokens, tok)
+				}
+
+				// Run the output validator here, inside the worker, so a
+				// rejected candidate counts as a worker failure and other
+				// workers keep trying instead of the whole call failing.
+				if cfg.outputValidator != nil && !cfg.outputValidator(tokens) {
+					select {
+					case resultCh <- result{err: fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation)}:
+					case <-workerCtx.Done():
+					}
+					return
 				}
 
 				select {

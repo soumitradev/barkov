@@ -35,6 +35,33 @@ func TestNGramSetValidator(t *testing.T) {
 	}
 }
 
+func TestNGramSetValidateMatchesValidator(t *testing.T) {
+	corpus := [][]string{{"a", "b", "c", "d"}}
+	enc := SepEncoder{Sep: SEP}
+	s := NewNGramSet(corpus, 3, enc)
+	v := s.Validator()
+
+	probes := [][]string{
+		{"a", "b", "c"},
+		{"b", "c", "d"},
+		{"x", "y", "z"},
+	}
+	for _, p := range probes {
+		if s.Validate(p) != v(p) {
+			t.Errorf("Validate(%v)=%v disagrees with Validator()(%v)=%v", p, s.Validate(p), p, v(p))
+		}
+	}
+}
+
+func TestNGramSetN(t *testing.T) {
+	corpus := [][]string{{"a", "b", "c", "d"}}
+	enc := SepEncoder{Sep: SEP}
+	s := NewNGramSet(corpus, 3, enc)
+	if s.N() != 3 {
+		t.Errorf("expected N()=3, got %d", s.N())
+	}
+}
+
 func TestNGramSetSize(t *testing.T) {
 	corpus := [][]string{{"a", "b", "c", "d"}}
 	enc := SepEncoder{Sep: SEP}
