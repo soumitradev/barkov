@@ -114,6 +114,12 @@ func (b *backoffCore) Move(state string) (TokenID, error) {
 // with ErrSentenceFailedValidation and the caller retries the sentence.
 func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 	steer := b.cfg.MaxVerbatim > 0 && b.runLongEnough(window)
+	// One steering-probe buffer per step, shared across every candidate
+	// probe below. Declaring it inside wouldExtendVerbatim would heap-
+	// allocate per candidate: the buffer's address flows through the
+	// orderTable interface call, so escape analysis can't stack it, and
+	// order-1 contexts on common tokens have thousands of candidates.
+	var probeBuf [8]TokenID
 	sawState := false
 	for m := b.cfg.MaxOrder; m >= 1; m-- {
 		tail := window[len(window)-m:]
@@ -125,7 +131,7 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 			continue // thin evidence; a shorter order has more
 		}
 		sawState = true
-		if tok, ok := b.sample(m, idx, window, steer); ok {
+		if tok, ok := b.sample(m, idx, window, steer, &probeBuf); ok {
 			return tok, nil
 		}
 		// All candidates at this order extend a verbatim run; back off.
@@ -157,10 +163,10 @@ func (b *backoffCore) runLongEnough(window []TokenID) bool {
 // order-R table doubles as the R-gram existence set: a context state
 // exists iff that R-gram occurs inside a message. END can never be
 // filtered: no state contains END, so the probe (.., END) always misses
-// and sentences can always terminate.
-func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID) bool {
+// and sentences can always terminate. probe is the caller's per-step
+// scratch buffer (see moveTail).
+func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID, probe *[8]TokenID) bool {
 	r := b.cfg.MaxVerbatim
-	var probe [8]TokenID
 	copy(probe[:r-1], window[len(window)-(r-1):])
 	probe[r-1] = tok
 	_, exists := b.tables[r-1].lookupTail(probe[:r])
@@ -173,10 +179,10 @@ func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID) bool {
 // steering active, candidates that would extend a verbatim run are
 // excluded and the survivors keep their original weights; ok=false
 // means every candidate was filtered.
-func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, steer bool) (TokenID, bool) {
+func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, steer bool, probeBuf *[8]TokenID) (TokenID, bool) {
 	if idx.Count == 1 {
 		tok := TokenID(idx.Offset)
-		if steer && b.wouldExtendVerbatim(window, tok) {
+		if steer && b.wouldExtendVerbatim(window, tok, probeBuf) {
 			return 0, false
 		}
 		return tok, true
@@ -195,7 +201,7 @@ func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, s
 	for i, tok := range choices {
 		w := cum[i] - prev
 		prev = cum[i]
-		if b.wouldExtendVerbatim(window, tok) {
+		if b.wouldExtendVerbatim(window, tok, probeBuf) {
 			continue
 		}
 		total += w
