@@ -24,7 +24,7 @@ func TestDepsStdlibOnly(t *testing.T) {
 		"./stuck",
 		"./hashers",
 		"./hashers/fnv",
-		// ./text is added by J.6; add it here once it exists.
+		"./text",
 	}
 
 	const modulePrefix = "github.com/soumitradev/barkov"
