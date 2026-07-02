@@ -229,6 +229,7 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		cc.Model.Put(stateKeys[s], barkov.ChoicesIndex{
 			Offset: indexOffset,
 			Count:  count,
+			Obs:    uint16(min(groupSize, 65535)),
 		})
 	}
 	return cc

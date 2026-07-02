@@ -376,6 +376,10 @@ func chooseToken32(cumDist []uint32) int {
 type ChoicesIndex struct {
 	Offset uint32
 	Count  uint16
+	// Obs is the total number of corpus observations of this state,
+	// saturating at 65535. Consumers gate on Obs >= K for small K, so
+	// saturation never changes behavior.
+	Obs uint16
 }
 
 // CompressedChain uses a struct-of-arrays layout for cache efficiency.
@@ -432,6 +436,7 @@ func (c *Chain[T]) Compress() *CompressedChain[T] {
 		cc.Model[state] = ChoicesIndex{
 			Offset: offset,
 			Count:  uint16(len(choices)),
+			Obs:    uint16(min(total, 65535)),
 		}
 	}
 	return cc
@@ -587,6 +592,7 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 		cc.Model[stateKeys[s]] = ChoicesIndex{
 			Offset: offset,
 			Count:  uint16(len(cc.Choices) - groupStart),
+			Obs:    uint16(min(total, 65535)),
 		}
 	}
 	return cc
