@@ -1,9 +1,12 @@
 package interned
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"math/rand/v2"
+	"os"
+	"strings"
 	"testing"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -154,6 +157,143 @@ func TestBackoffEndToEnd(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSteeringForcesLowerOrder pins the steering mechanics on a crafted
+// corpus. From window [p a b] with R=3, every candidate at orders 3, 2
+// (only "c") extends the corpus 3-gram (a,b,c) and is filtered; at order
+// 1 the [b] context offers "d" (from "q z b d"), whose probe (a,b,d) is
+// not a corpus 3-gram — so the steered walk must emit "d", while the
+// unsteered walk (MaxVerbatim=-1) always emits "c" from the order-3
+// context.
+func TestSteeringForcesLowerOrder(t *testing.T) {
+	corpus := [][]string{
+		{"p", "a", "b", "c"},
+		{"q", "z", "b", "d"},
+	}
+	vocab := NewVocabulary()
+	encoded := vocab.InternCorpus(corpus)
+	window := []TokenID{
+		mustLookup(t, vocab, "p"), mustLookup(t, vocab, "a"), mustLookup(t, vocab, "b"),
+	}
+	tokC := mustLookup(t, vocab, "c")
+	tokD := mustLookup(t, vocab, "d")
+
+	steered := BuildBackoff(BackoffConfig{MaxOrder: 3, MinSupport: 1, MaxVerbatim: 3}, encoded).(*backoffChain3)
+	for range 50 {
+		tok, err := steered.moveTail(window)
+		if err != nil {
+			t.Fatalf("steered moveTail: %v", err)
+		}
+		if tok != tokD {
+			t.Fatalf("steering should force the order-1 non-verbatim candidate 'd', got %v", vocab.Token(tok))
+		}
+	}
+
+	unsteered := BuildBackoff(BackoffConfig{MaxOrder: 3, MinSupport: 1, MaxVerbatim: -1}, encoded).(*backoffChain3)
+	for range 50 {
+		tok, err := unsteered.moveTail(window)
+		if err != nil {
+			t.Fatalf("unsteered moveTail: %v", err)
+		}
+		if tok != tokC {
+			t.Fatalf("MaxVerbatim=-1 should behave like I.3 and emit 'c', got %v", vocab.Token(tok))
+		}
+	}
+}
+
+// TestSteeringAllFiltered pins the exhaustion contract: when every
+// candidate at every order extends a verbatim run, the step fails with
+// wrapped ErrSentenceFailedValidation (not ErrStateNotFound).
+func TestSteeringAllFiltered(t *testing.T) {
+	corpus := [][]string{{"p", "a", "b", "c"}}
+	vocab := NewVocabulary()
+	encoded := vocab.InternCorpus(corpus)
+	window := []TokenID{
+		mustLookup(t, vocab, "p"), mustLookup(t, vocab, "a"), mustLookup(t, vocab, "b"),
+	}
+
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinSupport: 1, MaxVerbatim: 3}, encoded).(*backoffChain3)
+	_, err := chain.moveTail(window)
+	if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
+		t.Fatalf("all-filtered step should return ErrSentenceFailedValidation, got %v", err)
+	}
+}
+
+// TestSteeringNeverFiltersEnd pins termination: END never appears inside
+// a state key, so the steering probe (.., END) always misses and a
+// sentence can always terminate even under maximal steering.
+func TestSteeringNeverFiltersEnd(t *testing.T) {
+	corpus := repeat([]string{"a", "b", "c"}, 3)
+	vocab := NewVocabulary()
+	encoded := vocab.InternCorpus(corpus)
+	window := []TokenID{
+		mustLookup(t, vocab, "a"), mustLookup(t, vocab, "b"), mustLookup(t, vocab, "c"),
+	}
+
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinSupport: 1, MaxVerbatim: 3}, encoded).(*backoffChain3)
+	tok, err := chain.moveTail(window)
+	if err != nil {
+		t.Fatalf("moveTail at sentence end: %v", err)
+	}
+	if tok != EndTokenID {
+		t.Fatalf("expected END after the only corpus sentence, got %v", tok)
+	}
+}
+
+// TestSteeringOracle is the phase acceptance test: 1,000 steered
+// sentences on the public corpus contain zero verbatim 6-grams, checked
+// against NGramSet(corpus, 6) as the independent oracle.
+func TestSteeringOracle(t *testing.T) {
+	corpus := loadPublicCorpusInterned(t)
+	vocab := NewVocabulary()
+	encoded := vocab.InternCorpus(corpus)
+
+	const window = 6
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 6, MaxVerbatim: window}, encoded)
+	chain.(barkov.RNGSettable).SetRNG(rand.New(rand.NewPCG(0xb4, 0xc0)))
+	oracle := barkov.NewNGramSet(encoded, window, PackedEncoder{})
+
+	ctx := context.Background()
+	generated := 0
+	for generated < 1000 {
+		out, err := barkov.Gen(ctx, chain)
+		if err != nil {
+			if errors.Is(err, barkov.ErrSentenceFailedValidation) {
+				continue // steering dead-end; retry like a validator caller
+			}
+			t.Fatalf("Gen: %v", err)
+		}
+		generated++
+		for i := 0; i+window <= len(out); i++ {
+			if oracle.Contains(out[i : i+window]) {
+				t.Fatalf("steered output contains verbatim %d-gram %v in %v",
+					window, vocab.DecodeTokens(out[i:i+window]), vocab.DecodeTokens(out))
+			}
+		}
+	}
+}
+
+func loadPublicCorpusInterned(t *testing.T) [][]string {
+	t.Helper()
+	f, err := os.Open("../testdata/corpus_public.txt")
+	if err != nil {
+		t.Skipf("public corpus unavailable: %v", err)
+	}
+	defer f.Close()
+
+	var corpus [][]string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, "***") || strings.HasPrefix(line, "  ") {
+			continue
+		}
+		if tokens := strings.Fields(line); len(tokens) >= 4 {
+			corpus = append(corpus, tokens)
+		}
+	}
+	return corpus
 }
 
 // TestBackoffConfigValidation pins the panic contract on invalid configs

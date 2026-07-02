@@ -107,8 +107,14 @@ func (b *backoffCore) Move(state string) (TokenID, error) {
 
 // moveTail picks the next token for the given window (length MaxOrder):
 // longest supported context wins; orders with Obs below MinSupport are
-// skipped in favor of shorter contexts with more evidence.
+// skipped in favor of shorter contexts with more evidence. When steering
+// is active and every candidate at an order would extend a verbatim
+// corpus run, the walk falls through to the next shorter order, whose
+// candidate set is wider; if every order is exhausted the step fails
+// with ErrSentenceFailedValidation and the caller retries the sentence.
 func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
+	steer := b.cfg.MaxVerbatim > 0 && b.runLongEnough(window)
+	sawState := false
 	for m := b.cfg.MaxOrder; m >= 1; m-- {
 		tail := window[len(window)-m:]
 		idx, ok := b.tables[m-1].lookupTail(tail)
@@ -118,22 +124,97 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 		if m > 1 && uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
 			continue // thin evidence; a shorter order has more
 		}
-		return b.sample(m, idx)
+		sawState = true
+		if tok, ok := b.sample(m, idx, window, steer); ok {
+			return tok, nil
+		}
+		// All candidates at this order extend a verbatim run; back off.
 	}
 	var zero TokenID
+	if sawState {
+		return zero, fmt.Errorf("barkov: all continuations extend a verbatim run: %w",
+			barkov.ErrSentenceFailedValidation)
+	}
 	return zero, fmt.Errorf("barkov: state %v not in model at any order: %w",
 		window, barkov.ErrStateNotFound)
 }
 
+// runLongEnough reports whether the window's last MaxVerbatim-1 tokens
+// are all real (no Begin sentinel): only then can emitting a candidate
+// complete a MaxVerbatim-length run of real tokens worth filtering.
+// Matches the per-window validator, which also only sees full windows.
+func (b *backoffCore) runLongEnough(window []TokenID) bool {
+	for _, tok := range window[len(window)-(b.cfg.MaxVerbatim-1):] {
+		if tok == b.sentinels.Begin {
+			return false
+		}
+	}
+	return true
+}
+
+// wouldExtendVerbatim reports whether emitting tok after window would
+// complete a MaxVerbatim-gram that appears verbatim in the corpus. The
+// order-R table doubles as the R-gram existence set: a context state
+// exists iff that R-gram occurs inside a message. END can never be
+// filtered: no state contains END, so the probe (.., END) always misses
+// and sentences can always terminate.
+func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID) bool {
+	r := b.cfg.MaxVerbatim
+	var probe [8]TokenID
+	copy(probe[:r-1], window[len(window)-(r-1):])
+	probe[r-1] = tok
+	_, exists := b.tables[r-1].lookupTail(probe[:r])
+	return exists
+}
+
 // sample draws a follower from the order-m state idx, reproducing
 // pickFollow semantics: Count==1 states pack the follower into Offset;
-// otherwise a weighted draw over the cumulative distribution.
-func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex) (TokenID, error) {
+// otherwise a weighted draw over the cumulative distribution. With
+// steering active, candidates that would extend a verbatim run are
+// excluded and the survivors keep their original weights; ok=false
+// means every candidate was filtered.
+func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, steer bool) (TokenID, bool) {
 	if idx.Count == 1 {
-		return TokenID(idx.Offset), nil
+		tok := TokenID(idx.Offset)
+		if steer && b.wouldExtendVerbatim(window, tok) {
+			return 0, false
+		}
+		return tok, true
 	}
 	choices, cum := b.tables[m-1].slices(idx)
-	return choices[b.draw(cum)], nil
+	if !steer {
+		return choices[b.draw(cum)], true
+	}
+	// Weighted reservoir over the surviving candidates: one steering
+	// probe per candidate, no allocation, original cumdist-diff weights.
+	// Each survivor replaces the pick with probability weight/totalSoFar,
+	// which yields an exact weighted draw over the filtered set.
+	var pick TokenID
+	var total uint32
+	var prev uint32
+	for i, tok := range choices {
+		w := cum[i] - prev
+		prev = cum[i]
+		if b.wouldExtendVerbatim(window, tok) {
+			continue
+		}
+		total += w
+		if b.uint32n(total) < w {
+			pick = tok
+		}
+	}
+	if total == 0 {
+		return 0, false
+	}
+	return pick, true
+}
+
+// uint32n draws from [0, n) using the configured RNG.
+func (b *backoffCore) uint32n(n uint32) uint32 {
+	if b.rng != nil {
+		return b.rng.Uint32N(n)
+	}
+	return rand.Uint32N(n)
 }
 
 // draw picks an index into a cumulative distribution by weight.
