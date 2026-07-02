@@ -17,6 +17,15 @@ grep -rln '"github.com/soumitradev/barkov"' --include='*.go' . \
 go mod tidy
 ```
 
+The `sed` recipe is the right tool for a large monorepo with many import sites. For a single-repo migration, dropping the old requirement and re-fetching the new module path is often cleaner — the compiler then points at each remaining import one at a time instead of relying on a blanket rewrite:
+
+```bash
+go mod edit -droprequire github.com/soumitradev/barkov
+go get github.com/soumitradev/barkov/v2@v2.0.0-beta.6
+```
+
+**beta.7 note:** if you're migrating from `v2.0.0-beta.6`, upgrade straight to `v2.0.0-beta.7` — it fixes friction #1 from the beta.6 field report: `hashers/xxh3` and `hashers/xxhash64` used to be separate nested Go modules, so any consumer's `go mod tidy` walked into packages that don't exist inside the tagged `barkov/v2` module and exited non-zero. As of beta.7 those hashers are folded into the main module and `go mod tidy` exits 0 for consumers who only import the root `barkov` package.
+
 ## Chain types become generic
 
 `Chain` was a concrete type over `string`. It's now `Chain[T comparable]`, and the old single-type entry point `InitChain(n)` is a convenience wrapper that returns `*Chain[string]`.
