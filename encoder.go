@@ -29,10 +29,19 @@ type AppendEncoder[T comparable] interface {
 }
 
 // SepEncoder joins strings with a separator. The separator must not appear
-// in any real token. Used as the default for string chains.
+// in any real token. Used as the default for string chains. For the common
+// SEP-keyed instance, reference DefaultStringEncoder instead of
+// re-constructing the struct at each call site.
 type SepEncoder struct {
 	Sep string
 }
+
+// DefaultStringEncoder is the SepEncoder that string chains use by default
+// (InitChain wires it up, and it keys the same map as any string chain
+// built with SEP). Reference it instead of allocating SepEncoder{Sep: SEP}
+// in hot loops — for example when decoding CompressedChain state keys for
+// custom scoring.
+var DefaultStringEncoder = SepEncoder{Sep: SEP}
 
 // Encode joins tokens with the separator.
 func (e SepEncoder) Encode(tokens []string) string {

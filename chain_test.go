@@ -299,6 +299,79 @@ func TestPruneNoop(t *testing.T) {
 	}
 }
 
+func TestStateTotalAndStates(t *testing.T) {
+	corpus := [][]string{
+		{"a", "b", "c"},
+		{"a", "b", "d"},
+	}
+	cc := InitChain(2).BuildCompressed(corpus)
+	enc := SepEncoder{Sep: SEP}
+
+	// (a b) fans out to c(1) and d(1): total weight 2.
+	ab := enc.Encode([]string{"a", "b"})
+	total, err := cc.StateTotal(ab)
+	if err != nil {
+		t.Fatalf("StateTotal(a b): %v", err)
+	}
+	if total != 2 {
+		t.Errorf("StateTotal(a b) = %d, want 2", total)
+	}
+
+	// (BEGIN a) -> b appears in both sentences: total 2.
+	if total, _ := cc.StateTotal(enc.Encode([]string{BEGIN, "a"})); total != 2 {
+		t.Errorf("StateTotal(BEGIN a) = %d, want 2", total)
+	}
+
+	if _, err := cc.StateTotal("nonexistent"); !errors.Is(err, ErrStateNotFound) {
+		t.Errorf("StateTotal(nonexistent) = %v, want ErrStateNotFound", err)
+	}
+
+	// StateTotal must equal the sum of ChoicesCumDist's last entry.
+	choices, cumDist, err := cc.ChoicesCumDist(ab)
+	if err != nil {
+		t.Fatalf("ChoicesCumDist(a b): %v", err)
+	}
+	if len(choices) != 2 || cumDist[len(cumDist)-1] != 2 {
+		t.Errorf("ChoicesCumDist(a b) = %v / %v, want 2 choices summing to 2", choices, cumDist)
+	}
+
+	// States yields every state exactly once, with totals matching StateTotal.
+	seen := make(map[string]int, len(cc.Model))
+	for toks, tot := range cc.States() {
+		key := enc.Encode(toks)
+		seen[key]++
+		want, err := cc.StateTotal(key)
+		if err != nil {
+			t.Errorf("state %q from States() missing in StateTotal: %v", key, err)
+			continue
+		}
+		if tot != want {
+			t.Errorf("state %q: States total %d != StateTotal %d", key, tot, want)
+		}
+	}
+	if len(seen) != len(cc.Model) {
+		t.Errorf("States yielded %d distinct states, model has %d", len(seen), len(cc.Model))
+	}
+	for key, n := range seen {
+		if n != 1 {
+			t.Errorf("state %q yielded %d times, want exactly 1", key, n)
+		}
+	}
+
+	// The yielded slice is safe to retain (freshly allocated per iteration).
+	var retained [][]string
+	for toks := range cc.States() {
+		retained = append(retained, toks)
+	}
+	for i := range retained {
+		for j := i + 1; j < len(retained); j++ {
+			if len(retained[i]) > 0 && len(retained[j]) > 0 && &retained[i][0] == &retained[j][0] {
+				t.Errorf("States reused a backing array across iterations")
+			}
+		}
+	}
+}
+
 func TestChainValidate(t *testing.T) {
 	corpus := [][]string{
 		{"a", "b", "c", "d"},

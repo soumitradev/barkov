@@ -60,6 +60,21 @@ func TestSepEncoderInjectivity(t *testing.T) {
 	}
 }
 
+func TestDefaultStringEncoder(t *testing.T) {
+	tokens := []string{"the", "quick", "brown"}
+	got := DefaultStringEncoder.Encode(tokens)
+	want := SepEncoder{Sep: SEP}.Encode(tokens)
+	if got != want {
+		t.Errorf("DefaultStringEncoder.Encode = %q, want %q", got, want)
+	}
+	if DefaultStringEncoder.Sep != SEP {
+		t.Errorf("DefaultStringEncoder.Sep = %q, want SEP", DefaultStringEncoder.Sep)
+	}
+	if decoded := DefaultStringEncoder.Decode(got); !slices.Equal(decoded, tokens) {
+		t.Errorf("round-trip failed: got %v, want %v", decoded, tokens)
+	}
+}
+
 // TestSepEncoderAppendEquivalence verifies the AppendEncoder fast path
 // produces byte-identical output to Encode for all inputs. This is the
 // contract that BuildRaw relies on.

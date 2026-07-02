@@ -2,6 +2,7 @@ package barkov
 
 import (
 	"fmt"
+	"iter"
 	"math/rand/v2"
 	"sort"
 	"unsafe"
@@ -618,6 +619,51 @@ func (cc *CompressedChain[T]) Move(state string) (T, error) {
 // MoveTokens is a convenience wrapper that encodes the state for the caller.
 func (cc *CompressedChain[T]) MoveTokens(tokens []T) (T, error) {
 	return cc.Move(cc.encoder.Encode(tokens))
+}
+
+// ChoicesCumDist returns the choices and cumulative-distribution slices
+// backing a state. The returned slices alias internal storage and must
+// not be modified. Intended for callers that want to implement their
+// own sampling (temperature scaling, repetition penalty, etc.) instead
+// of the uniform weighted draw that Move performs.
+//
+// Returns ErrStateNotFound if the state isn't in the model.
+func (cc *CompressedChain[T]) ChoicesCumDist(state string) (choices []T, cumDist []uint32, err error) {
+	idx, ok := cc.Model[state]
+	if !ok {
+		return nil, nil, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
+	}
+	choices = cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
+	cumDist = cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+	return choices, cumDist, nil
+}
+
+// StateTotal returns the total observation weight of state (the sum of
+// all its transition counts), or ErrStateNotFound. CumDist is cumulative
+// within each state's group, so the total is the group's last entry —
+// no iteration over followers needed.
+func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
+	idx, ok := cc.Model[state]
+	if !ok {
+		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
+	}
+	return cc.CumDist[idx.Offset+uint32(idx.Count)-1], nil
+}
+
+// States iterates all states as decoded token slices with their total
+// weights. The yielded slice is freshly allocated each iteration (via the
+// chain's own encoder) and safe to retain, so callers doing custom
+// scoring never cache an encoder or decode keys by hand. Perf-sensitive
+// callers can iterate Model directly.
+func (cc *CompressedChain[T]) States() iter.Seq2[[]T, uint32] {
+	return func(yield func([]T, uint32) bool) {
+		for state, idx := range cc.Model {
+			total := cc.CumDist[idx.Offset+uint32(idx.Count)-1]
+			if !yield(cc.encoder.Decode(state), total) {
+				return
+			}
+		}
+	}
 }
 
 // InitChain is the zero-configuration constructor for string chains.

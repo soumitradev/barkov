@@ -108,6 +108,53 @@ type CompressedChain[T comparable] struct {
 }
 ```
 
+### Common queries on CompressedChain
+
+Custom scoring and state selection used to re-derive the same recipes with raw index arithmetic and a hand-cached encoder. beta.7 adds accessors so you do not have to reach into `Choices`/`CumDist` by hand.
+
+Total observation weight of a state.
+
+Before:
+```go
+freq := chain.CumDist[uint32(idx.Offset)+uint32(idx.Count)-1]
+```
+After:
+```go
+freq, err := chain.StateTotal(state)
+```
+
+Follower tokens and their cumulative distribution (for custom samplers).
+
+Before:
+```go
+choices := chain.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
+cumDist := chain.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+```
+After:
+```go
+choices, cumDist, err := chain.ChoicesCumDist(state) // aliases internal storage; read-only
+```
+
+Iterate every state as decoded tokens plus its total weight.
+
+Before:
+```go
+encoder := barkov.SepEncoder{Sep: barkov.SEP}
+for state, idx := range chain.Model {
+    tokens := encoder.Decode(state)
+    total := chain.CumDist[uint32(idx.Offset)+uint32(idx.Count)-1]
+    // ...
+}
+```
+After:
+```go
+for tokens, total := range chain.States() {
+    // ...
+}
+```
+
+When you do need to decode a key by hand, use `barkov.DefaultStringEncoder` instead of allocating `SepEncoder{Sep: SEP}` per call.
+
 ## One `Gen` with functional options
 
 All six v1 `Gen*` functions collapse into one `Gen(ctx, chain, opts...)`. Timeouts move to `context.Context`.
