@@ -92,6 +92,37 @@ func BenchmarkBuildIndexedByN(b *testing.B) {
 	}
 }
 
+// BenchmarkGenBackoff isolates per-token walk cost on the backoff engine,
+// mirroring BenchmarkGenHeavyInterned's shape (10k gens per iteration,
+// seeded PCG). plain (MaxVerbatim=-1) measures the multi-order probe
+// stack alone; steered (defaults) adds the per-candidate steering probes.
+func BenchmarkGenBackoff(b *testing.B) {
+	ctx := context.Background()
+	vocab := interned.NewVocabulary()
+	encoded := vocab.InternCorpus(internedCorpus)
+
+	cases := []struct {
+		name string
+		cfg  interned.BackoffConfig
+	}{
+		{"plain", interned.BackoffConfig{MaxVerbatim: -1}},
+		{"steered", interned.BackoffConfig{}},
+	}
+	for _, tc := range cases {
+		chain := interned.BuildBackoff(tc.cfg, encoded)
+		rng := chain.(barkov.RNGSettable)
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				rng.SetRNG(rand.New(rand.NewPCG(0xb4, 0xc0)))
+				for range 10000 {
+					barkov.Gen(ctx, chain) //nolint
+				}
+			}
+		})
+		rng.SetRNG(nil)
+	}
+}
+
 // BenchmarkGenHeavyIndexedByN mirrors BenchmarkGenHeavyInterned for all
 // supported N. Each subtest uses a freshly-built chain; the inner loop
 // amortises b.Loop overhead so the per-Gen cost is visible. Validates

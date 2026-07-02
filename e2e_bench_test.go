@@ -118,6 +118,30 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 			barkov.Gen(ctx, compressed, barkov.WithValidator(v)) //nolint
 		}
 	})
+
+	// backoff/plain isolates the multi-order build + walk cost with
+	// steering off; backoff/steered is the full quality setup and the
+	// interesting comparison against interned/XXH3 (the closest previous
+	// quality configuration: fixed-order chain + hash anti-verbatim
+	// validator). Steering trades whole-sentence rejection retries for
+	// per-order and per-candidate probes during the walk.
+	b.Run("backoff/plain", func(b *testing.B) {
+		for b.Loop() {
+			vocab := interned.NewVocabulary()
+			encoded := vocab.InternCorpus(e2eCorpus)
+			chain := interned.BuildBackoff(interned.BackoffConfig{MaxVerbatim: -1}, encoded)
+			barkov.Gen(ctx, chain) //nolint
+		}
+	})
+
+	b.Run("backoff/steered", func(b *testing.B) {
+		for b.Loop() {
+			vocab := interned.NewVocabulary()
+			encoded := vocab.InternCorpus(e2eCorpus)
+			chain := interned.BuildBackoff(interned.BackoffConfig{}, encoded)
+			barkov.Gen(ctx, chain) //nolint
+		}
+	})
 }
 
 // BenchmarkPipelineSimpleVsMaxOpt compares the plain string pipeline

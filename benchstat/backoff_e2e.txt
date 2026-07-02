@@ -1,0 +1,62 @@
+Phase I new-engine benchmarks (post steering probe-buffer fix, b5e8e89).
+count=5; GenBackoff at -cpu=4, EndToEndAllConfigs/backoff at -cpu=24.
+
+Reading the numbers against the closest previous quality setup
+(interned/XXH3 at ~141ms e2e, ~14µs/gen indexed micro):
+- e2e (build + one gen): backoff ~1.0s vs 141ms — ~7x, one corpus pass per
+  order (6 tables). B/op 484Mi is transient build churn, not residency.
+- gen micro (10k gens/op): plain 124.9ms = ~12.5µs/gen (multi-order probe
+  stack alone, ~same as a single-order chain plus backoff probes); steered
+  2.89s = ~289µs/gen — the per-candidate steering probes at wide order-1
+  contexts dominate. Allocation is flat vs plain (~37 allocs/gen) after
+  hoisting the probe buffer; the remaining cost is cache misses, not GC.
+- What steering buys for that: zero verbatim 6-grams in 1,000 sentences
+  (TestSteeringOracle) with no generate-reject-retry loop and no validator
+  to wire; interned/XXH3 only rejects after generating a full sentence.
+All comfortably inside the deployment budget (a handful of gens per day).
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+                                      │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_new.txt │
+                                      │                                                    sec/op                                                     │
+EndToEndAllConfigs/backoff/plain-24                                                                                                      996.9m ± ∞ ¹
+EndToEndAllConfigs/backoff/steered-24                                                                                                     1.028 ± ∞ ¹
+geomean                                                                                                                                   1.012
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                      │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_new.txt │
+                                      │                                                     B/op                                                      │
+EndToEndAllConfigs/backoff/plain-24                                                                                                     484.6Mi ± ∞ ¹
+EndToEndAllConfigs/backoff/steered-24                                                                                                   484.6Mi ± ∞ ¹
+geomean                                                                                                                                 484.6Mi
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                      │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_new.txt │
+                                      │                                                   allocs/op                                                   │
+EndToEndAllConfigs/backoff/plain-24                                                                                                      53.24k ± ∞ ¹
+EndToEndAllConfigs/backoff/steered-24                                                                                                    53.24k ± ∞ ¹
+geomean                                                                                                                                  53.24k
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/soumitradev/barkov/v2/interned
+                     │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_new.txt │
+                     │                                                    sec/op                                                     │
+GenBackoff/plain-4                                                                                                      124.9m ± ∞ ¹
+GenBackoff/steered-4                                                                                                     2.890 ± ∞ ¹
+geomean                                                                                                                 600.6m
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                     │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_new.txt │
+                     │                                                     B/op                                                      │
+GenBackoff/plain-4                                                                                                     11.29Mi ± ∞ ¹
+GenBackoff/steered-4                                                                                                   11.23Mi ± ∞ ¹
+geomean                                                                                                                11.26Mi
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                     │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_new.txt │
+                     │                                                   allocs/op                                                   │
+GenBackoff/plain-4                                                                                                      368.7k ± ∞ ¹
+GenBackoff/steered-4                                                                                                    366.6k ± ∞ ¹
+geomean                                                                                                                 367.7k
+¹ need >= 6 samples for confidence interval at level 0.95

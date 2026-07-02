@@ -1,0 +1,89 @@
+Phase I regression check (Rule R1): baseline bb8cce5 (end of Phase J) vs HEAD
+(end of Phase I). count=5; GenHeavyIndexedByN at -cpu=4, EndToEndAllConfigs
+(string/interned configs) at -cpu=24. Phase I is additive: ChoicesIndex.Obs
+fills former padding (layout unchanged), order-1 dispatch adds one switch
+case, backoff is a new engine behind new constructors.
+
+Result: no regressions. GenHeavyIndexedByN all ~ (geomean -0.71%); B/op and
+allocs/op flat. EndToEndAllConfigs geomean -10% with two interned configs
+nominally improved (favorable run-to-run drift on e2e configs; nothing in
+this phase touches those paths).
+
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+                                        │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_baseline.txt │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_after.txt │
+                                        │                                                       sec/op                                                       │                                          sec/op                                           vs base               │
+EndToEndAllConfigs/string/plain-24                                                                                                              241.4m ± ∞ ¹                                                                               205.0m ± ∞ ¹        ~ (p=0.056 n=5)
+EndToEndAllConfigs/string/NGramSet-24                                                                                                           258.2m ± ∞ ¹                                                                               268.6m ± ∞ ¹        ~ (p=1.000 n=5)
+EndToEndAllConfigs/string/FNV-24                                                                                                                273.9m ± ∞ ¹                                                                               263.8m ± ∞ ¹        ~ (p=1.000 n=5)
+EndToEndAllConfigs/string/XXH3-24                                                                                                               241.2m ± ∞ ¹                                                                               232.4m ± ∞ ¹        ~ (p=0.841 n=5)
+EndToEndAllConfigs/interned/plain-24                                                                                                            142.7m ± ∞ ¹                                                                               118.5m ± ∞ ¹        ~ (p=0.151 n=5)
+EndToEndAllConfigs/interned/NGramSet-24                                                                                                         191.6m ± ∞ ¹                                                                               151.9m ± ∞ ¹  -20.69% (p=0.008 n=5)
+EndToEndAllConfigs/interned/FNV-24                                                                                                              162.8m ± ∞ ¹                                                                               140.2m ± ∞ ¹  -13.87% (p=0.008 n=5)
+EndToEndAllConfigs/interned/XXH3-24                                                                                                             157.8m ± ∞ ¹                                                                               141.4m ± ∞ ¹        ~ (p=0.222 n=5)
+geomean                                                                                                                                         203.1m                                                                                     182.0m        -10.36%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                        │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_baseline.txt │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_after.txt │
+                                        │                                                        B/op                                                        │                                           B/op                                             vs base              │
+EndToEndAllConfigs/string/plain-24                                                                                                             156.6Mi ± ∞ ¹                                                                               156.6Mi ± ∞ ¹       ~ (p=0.310 n=5)
+EndToEndAllConfigs/string/NGramSet-24                                                                                                          205.2Mi ± ∞ ¹                                                                               205.2Mi ± ∞ ¹       ~ (p=0.571 n=5)
+EndToEndAllConfigs/string/FNV-24                                                                                                               170.1Mi ± ∞ ¹                                                                               170.1Mi ± ∞ ¹       ~ (p=0.714 n=5)
+EndToEndAllConfigs/string/XXH3-24                                                                                                              170.1Mi ± ∞ ¹                                                                               170.1Mi ± ∞ ¹       ~ (p=0.762 n=5)
+EndToEndAllConfigs/interned/plain-24                                                                                                           101.5Mi ± ∞ ¹                                                                               101.5Mi ± ∞ ¹       ~ (p=0.548 n=5)
+EndToEndAllConfigs/interned/NGramSet-24                                                                                                        133.7Mi ± ∞ ¹                                                                               133.8Mi ± ∞ ¹       ~ (p=0.500 n=5)
+EndToEndAllConfigs/interned/FNV-24                                                                                                             115.0Mi ± ∞ ¹                                                                               115.0Mi ± ∞ ¹       ~ (p=0.151 n=5)
+EndToEndAllConfigs/interned/XXH3-24                                                                                                            115.0Mi ± ∞ ¹                                                                               115.0Mi ± ∞ ¹       ~ (p=0.095 n=5)
+geomean                                                                                                                                        142.2Mi                                                                                     142.2Mi        +0.01%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                        │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_baseline.txt │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_after.txt │
+                                        │                                                     allocs/op                                                      │                                         allocs/op                                          vs base              │
+EndToEndAllConfigs/string/plain-24                                                                                                              4.259k ± ∞ ¹                                                                                4.258k ± ∞ ¹       ~ (p=1.000 n=5)
+EndToEndAllConfigs/string/NGramSet-24                                                                                                           5.815k ± ∞ ¹                                                                                5.816k ± ∞ ¹       ~ (p=0.492 n=5)
+EndToEndAllConfigs/string/FNV-24                                                                                                                5.808k ± ∞ ¹                                                                                5.808k ± ∞ ¹       ~ (p=1.000 n=5)
+EndToEndAllConfigs/string/XXH3-24                                                                                                               5.809k ± ∞ ¹                                                                                5.809k ± ∞ ¹       ~ (p=0.960 n=5)
+EndToEndAllConfigs/interned/plain-24                                                                                                            52.51k ± ∞ ¹                                                                                52.51k ± ∞ ¹       ~ (p=0.690 n=5)
+EndToEndAllConfigs/interned/NGramSet-24                                                                                                         54.06k ± ∞ ¹                                                                                54.06k ± ∞ ¹       ~ (p=0.952 n=5)
+EndToEndAllConfigs/interned/FNV-24                                                                                                              54.05k ± ∞ ¹                                                                                54.06k ± ∞ ¹       ~ (p=0.079 n=5)
+EndToEndAllConfigs/interned/XXH3-24                                                                                                             54.05k ± ∞ ¹                                                                                54.06k ± ∞ ¹       ~ (p=0.056 n=5)
+geomean                                                                                                                                         16.99k                                                                                      16.99k        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/soumitradev/barkov/v2/interned
+                         │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_baseline.txt │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_after.txt │
+                         │                                                       sec/op                                                       │                                          sec/op                                            vs base              │
+GenHeavyIndexedByN/N=2-4                                                                                                         11.76m ± ∞ ¹                                                                                11.77m ± ∞ ¹       ~ (p=1.000 n=5)
+GenHeavyIndexedByN/N=3-4                                                                                                         13.58m ± ∞ ¹                                                                                13.48m ± ∞ ¹       ~ (p=1.000 n=5)
+GenHeavyIndexedByN/N=4-4                                                                                                         14.54m ± ∞ ¹                                                                                13.85m ± ∞ ¹       ~ (p=0.151 n=5)
+GenHeavyIndexedByN/N=5-4                                                                                                         18.25m ± ∞ ¹                                                                                17.95m ± ∞ ¹       ~ (p=0.151 n=5)
+GenHeavyIndexedByN/N=6-4                                                                                                         17.67m ± ∞ ¹                                                                                18.34m ± ∞ ¹       ~ (p=0.222 n=5)
+GenHeavyIndexedByN/N=7-4                                                                                                         18.87m ± ∞ ¹                                                                                19.31m ± ∞ ¹       ~ (p=0.095 n=5)
+GenHeavyIndexedByN/N=8-4                                                                                                         18.52m ± ∞ ¹                                                                                17.81m ± ∞ ¹       ~ (p=0.222 n=5)
+geomean                                                                                                                          15.94m                                                                                      15.83m        -0.71%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                         │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_baseline.txt │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_after.txt │
+                         │                                                        B/op                                                        │                                           B/op                                             vs base              │
+GenHeavyIndexedByN/N=2-4                                                                                                        4.226Mi ± ∞ ¹                                                                               4.225Mi ± ∞ ¹       ~ (p=0.421 n=5)
+GenHeavyIndexedByN/N=3-4                                                                                                        4.220Mi ± ∞ ¹                                                                               4.221Mi ± ∞ ¹       ~ (p=0.548 n=5)
+GenHeavyIndexedByN/N=4-4                                                                                                        4.167Mi ± ∞ ¹                                                                               4.167Mi ± ∞ ¹       ~ (p=0.548 n=5)
+GenHeavyIndexedByN/N=5-4                                                                                                        4.143Mi ± ∞ ¹                                                                               4.143Mi ± ∞ ¹       ~ (p=0.841 n=5)
+GenHeavyIndexedByN/N=6-4                                                                                                        4.138Mi ± ∞ ¹                                                                               4.138Mi ± ∞ ¹       ~ (p=0.421 n=5)
+GenHeavyIndexedByN/N=7-4                                                                                                        4.138Mi ± ∞ ¹                                                                               4.137Mi ± ∞ ¹       ~ (p=0.095 n=5)
+GenHeavyIndexedByN/N=8-4                                                                                                        4.137Mi ± ∞ ¹                                                                               4.137Mi ± ∞ ¹       ~ (p=0.841 n=5)
+geomean                                                                                                                         4.167Mi                                                                                     4.167Mi        -0.01%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                         │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_baseline.txt │ /tmp/claude-1000/-home-soumitradev-Code-barkov/688929c0-9f0a-4c05-80c9-81376f7b779e/scratchpad/phasei_after.txt │
+                         │                                                     allocs/op                                                      │                                         allocs/op                                          vs base              │
+GenHeavyIndexedByN/N=2-4                                                                                                         106.1k ± ∞ ¹                                                                                106.1k ± ∞ ¹       ~ (p=0.635 n=5)
+GenHeavyIndexedByN/N=3-4                                                                                                         108.6k ± ∞ ¹                                                                                108.6k ± ∞ ¹       ~ (p=0.730 n=5)
+GenHeavyIndexedByN/N=4-4                                                                                                         109.0k ± ∞ ¹                                                                                109.0k ± ∞ ¹       ~ (p=0.508 n=5)
+GenHeavyIndexedByN/N=5-4                                                                                                         108.9k ± ∞ ¹                                                                                108.9k ± ∞ ¹       ~ (p=0.786 n=5)
+GenHeavyIndexedByN/N=6-4                                                                                                         108.9k ± ∞ ¹                                                                                108.9k ± ∞ ¹       ~ (p=0.238 n=5)
+GenHeavyIndexedByN/N=7-4                                                                                                         108.9k ± ∞ ¹                                                                                108.9k ± ∞ ¹       ~ (p=0.103 n=5)
+GenHeavyIndexedByN/N=8-4                                                                                                         108.9k ± ∞ ¹                                                                                108.9k ± ∞ ¹       ~ (p=0.714 n=5)
+geomean                                                                                                                          108.5k                                                                                      108.5k        -0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
