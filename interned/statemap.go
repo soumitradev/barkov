@@ -151,5 +151,18 @@ func (m *stateMap[K, V]) grow() {
 	}
 }
 
+// forEach calls f once per live entry, in slot order. f receives a
+// pointer to the stored value and may mutate it in place; it must not
+// insert or the table may grow underneath the iteration.
+func (m *stateMap[K, V]) forEach(f func(key K, val *V)) {
+	var zero V
+	for i := range m.entries {
+		e := &m.entries[i]
+		if e.val != zero {
+			f(e.key, &e.val)
+		}
+	}
+}
+
 // Len returns the number of live entries.
 func (m *stateMap[K, V]) Len() int { return int(m.count) }

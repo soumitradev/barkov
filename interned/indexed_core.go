@@ -90,6 +90,13 @@ func (c *indexedCore[K]) Move(state string) (TokenID, error) {
 // rather than a string. The caller is expected to pre-intern the corpus
 // via Vocabulary.InternCorpus and to select a K whose byte size matches
 // stateSize*4.
+//
+// The state table is built once and reused as the final Model: during the
+// corpus scan each slot's ChoicesIndex holds the dense observation index
+// (Offset = idx+1, so no legitimate value equals the zero-slot sentinel);
+// the grouping pass then overwrites every slot in place via forEach. This
+// skips the separate rehash-and-insert pass (and its allocation) that
+// copying unique states into a fresh table used to cost.
 func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 	var zero K
 	stateSize := int(unsafe.Sizeof(zero)) / 4
@@ -108,21 +115,17 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		totalObs += len(run) + 1
 	}
 
-	// stateIdx is transient (freed when buildIndexedCore returns), but
-	// profiling showed Go's map probes (mapaccess2 + ctrlGroup.matchH2)
-	// dominating build time. Swap to the same custom stateMap used for
-	// the gen-path Model — tight-sized for the transient lifetime, and
-	// no Model-size impact since the final Model is built separately.
-	// Values are stored as idx+1 so the zero-value-sentinel contract
-	// (stateMap treats V==zero as empty) holds for legitimate idx=0.
-	estUnique := totalObs + 64
-	stateIdx := newStateMap[K, uint32](estUnique)
-	stateKeys := make([]K, 0, estUnique)
+	// Observed unique-states/observations ratios on the public corpus:
+	// 0.08, 0.43, 0.73 for N=1,2,3 and ~0.84 for N>=4. Sizing the table to
+	// the estimate skips growth rehashes; the odd miss just grows.
+	estUnique := int(float64(totalObs)*stateRatioEst(stateSize)) + 64
+	stateIdx := newStateMap[K, barkov.ChoicesIndex](estUnique)
 	items := make([]TokenID, 0, stateSize+maxLen+1)
 
 	pendingState := make([]uint32, 0, totalObs)
 	pendingTok := make([]TokenID, 0, totalObs)
 
+	var numStates uint32
 	for _, run := range corpus {
 		items = items[:0]
 		items = append(items, beginSeq...)
@@ -134,21 +137,22 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			// so reinterpreting the first stateSize*4 bytes as K is safe.
 			key := *(*K)(unsafe.Pointer(&items[i]))
 			follow := items[i+stateSize]
-			newStored := uint32(len(stateKeys)) + 1
-			existing, found := stateIdx.GetOrSet(key, newStored)
+			existing, found := stateIdx.GetOrSet(key, barkov.ChoicesIndex{Offset: numStates + 1})
 			var idx uint32
 			if found {
-				idx = existing - 1
+				idx = existing.Offset - 1
 			} else {
-				idx = newStored - 1
-				stateKeys = append(stateKeys, key)
+				idx = numStates
+				numStates++
 			}
 			pendingState = append(pendingState, idx)
 			pendingTok = append(pendingTok, follow)
 		}
 	}
 
-	numStates := len(stateKeys)
+	// Per-state linked list of observation indices. head[s] is the latest
+	// observation index for state s (or -1); next[i] is the prior obs idx
+	// sharing the same state.
 	head := make([]int32, numStates)
 	for i := range head {
 		head[i] = -1
@@ -162,15 +166,22 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 	cc := &indexedCore[K]{
 		sentinels: sentinels,
 		encoder:   PackedEncoder{},
-		Model:     newStateMap[K, barkov.ChoicesIndex](numStates),
 		Choices:   make([]TokenID, 0, totalObs),
 		CumDist:   make([]uint32, 0, totalObs),
 		stateSize: stateSize,
 	}
 
+	// Walk each state's linked list; dedupe follows into cc.Choices/CumDist.
+	// Small groups (<=16) dedupe via linear scan (beats map hashing and
+	// allocates nothing); large groups use a reusable counting map whose
+	// bucket storage is cleared and reused across states, amortising cost
+	// at O(group_size) without the O(group²) blowup that linear scan would
+	// suffer on pathological fan-out states like begin. The finished
+	// ChoicesIndex is written back into the table slot in place.
 	const linearThreshold = 16
 	var countBuf map[TokenID]uint32
-	for s := range numStates {
+	stateIdx.forEach(func(_ K, val *barkov.ChoicesIndex) {
+		s := val.Offset - 1
 		offset := uint32(len(cc.Choices))
 		groupStart := len(cc.Choices)
 
@@ -229,11 +240,29 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			}
 			indexOffset = offset
 		}
-		cc.Model.Put(stateKeys[s], barkov.ChoicesIndex{
+		*val = barkov.ChoicesIndex{
 			Offset: indexOffset,
 			Count:  count,
 			Obs:    uint16(min(groupSize, 65535)),
-		})
-	}
+		}
+	})
+	cc.Model = stateIdx
 	return cc
+}
+
+// stateRatioEst approximates the unique-states/observations ratio for a
+// given order on prose corpora (measured on the bundled public corpus).
+// Only used to size the state table; the table grows if the estimate
+// undershoots.
+func stateRatioEst(stateSize int) float64 {
+	switch stateSize {
+	case 1:
+		return 0.10
+	case 2:
+		return 0.45
+	case 3:
+		return 0.75
+	default:
+		return 0.85
+	}
 }
