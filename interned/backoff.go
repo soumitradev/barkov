@@ -113,10 +113,15 @@ func (b *backoffCore) Move(state string) (TokenID, error) {
 // candidate set is wider; if every order is exhausted the step fails
 // with ErrSentenceFailedValidation and the caller retries the sentence.
 func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
-	steer := b.cfg.MaxVerbatim > 0 && b.runLongEnough(window)
-	// One steering-probe buffer per step, shared across every candidate
-	// probe below. Declaring it inside wouldExtendVerbatim would heap-
-	// allocate per candidate: the buffer's address flows through the
+	// One steering snapshot per step, shared by every candidate check at
+	// every order: all of them test membership in the same follower set.
+	var sv steerView
+	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(window) {
+		sv = b.steerSnapshot(window)
+	}
+	// Steering-probe buffer for the steerBig fallback, shared across every
+	// candidate probe below. Declaring it inside wouldExtendVerbatim would
+	// heap-allocate per candidate: the buffer's address flows through the
 	// orderTable interface call, so escape analysis can't stack it, and
 	// order-1 contexts on common tokens have thousands of candidates.
 	var probeBuf [8]TokenID
@@ -131,7 +136,7 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 			continue // thin evidence; a shorter order has more
 		}
 		sawState = true
-		if tok, ok := b.sample(m, idx, window, steer, &probeBuf); ok {
+		if tok, ok := b.sample(m, idx, window, sv, &probeBuf); ok {
 			return tok, nil
 		}
 		// All candidates at this order extend a verbatim run; back off.
@@ -158,13 +163,91 @@ func (b *backoffCore) runLongEnough(window []TokenID) bool {
 	return true
 }
 
+// steerMode classifies the per-step steering snapshot.
+type steerMode uint8
+
+const (
+	steerOff     steerMode = iota // steering inactive (or nothing to filter)
+	steerSingle                   // steering state has exactly one follower
+	steerSet                      // small follower set: linear membership scan
+	steerBig                      // large follower set: per-candidate table probe
+)
+
+// steerView is the per-step snapshot of the steering state: the followers
+// of the window's last MaxVerbatim-1 tokens in the order-(MaxVerbatim-1)
+// table. A candidate completes a verbatim corpus MaxVerbatim-gram iff it
+// belongs to that follower set — the (MaxVerbatim-1)-gram's followers are
+// exactly the tokens that complete a corpus MaxVerbatim-gram — so one
+// lookup per step replaces the per-candidate probes of the larger
+// order-MaxVerbatim table that steering used to cost.
+type steerView struct {
+	mode   steerMode
+	single TokenID   // steerSingle: the sole follower
+	set    []TokenID // steerSet: follower slice (aliases chain storage; read-only)
+}
+
+// steerProbeFallback caps the follower-set size handled by membership
+// scan; larger sets fall back to one order-MaxVerbatim table probe per
+// candidate (the pre-snapshot behavior). On prose corpora ~98% of
+// steering states have a single follower and >99% have at most two, so
+// the fallback is reached only from a handful of high-fanout states.
+const steerProbeFallback = 16
+
+// steerSnapshot resolves the steering state for window once: the
+// order-(r-1) table entry for the window's last r-1 tokens, where
+// r = MaxVerbatim. The zero value (steerOff) means no candidate can
+// complete a verbatim gram at this step.
+func (b *backoffCore) steerSnapshot(window []TokenID) steerView {
+	r := b.cfg.MaxVerbatim
+	idx, ok := b.tables[r-2].lookupTail(window[len(window)-(r-1):])
+	if !ok {
+		return steerView{}
+	}
+	if idx.Count == 1 {
+		return steerView{mode: steerSingle, single: TokenID(idx.Offset)}
+	}
+	set, _ := b.tables[r-2].slices(idx)
+	if len(set) > steerProbeFallback {
+		return steerView{mode: steerBig}
+	}
+	return steerView{mode: steerSet, set: set}
+}
+
+// filtered reports whether emitting tok after window would complete a
+// verbatim MaxVerbatim-gram. End is never filtered: no order-MaxVerbatim
+// state contains End (windows stop before it), so the original
+// per-candidate probe always missed for End — but End IS present in
+// follower sets as the terminal transition, so it must be excluded
+// explicitly here to preserve those semantics (and let sentences
+// terminate under maximal steering).
+func (b *backoffCore) filtered(sv steerView, window []TokenID, tok TokenID, probeBuf *[8]TokenID) bool {
+	if tok == b.sentinels.End {
+		return false
+	}
+	switch sv.mode {
+	case steerSingle:
+		return tok == sv.single
+	case steerSet:
+		for _, f := range sv.set {
+			if f == tok {
+				return true
+			}
+		}
+		return false
+	case steerBig:
+		return b.wouldExtendVerbatim(window, tok, probeBuf)
+	}
+	return false
+}
+
 // wouldExtendVerbatim reports whether emitting tok after window would
 // complete a MaxVerbatim-gram that appears verbatim in the corpus. The
 // order-R table doubles as the R-gram existence set: a context state
 // exists iff that R-gram occurs inside a message. END can never be
 // filtered: no state contains END, so the probe (.., END) always misses
 // and sentences can always terminate. probe is the caller's per-step
-// scratch buffer (see moveTail).
+// scratch buffer (see moveTail). Used only on the steerBig fallback path;
+// the common path tests follower-set membership via filtered instead.
 func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID, probe *[8]TokenID) bool {
 	r := b.cfg.MaxVerbatim
 	copy(probe[:r-1], window[len(window)-(r-1):])
@@ -179,40 +262,74 @@ func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID, probe *
 // steering active, candidates that would extend a verbatim run are
 // excluded and the survivors keep their original weights; ok=false
 // means every candidate was filtered.
-func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, steer bool, probeBuf *[8]TokenID) (TokenID, bool) {
+func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, bool) {
 	if idx.Count == 1 {
 		tok := TokenID(idx.Offset)
-		if steer && b.wouldExtendVerbatim(window, tok, probeBuf) {
+		if sv.mode != steerOff && b.filtered(sv, window, tok, probeBuf) {
 			return 0, false
 		}
 		return tok, true
 	}
 	choices, cum := b.tables[m-1].slices(idx)
-	if !steer {
+	if sv.mode == steerOff {
 		return choices[b.draw(cum)], true
 	}
-	// Weighted reservoir over the surviving candidates: one steering
-	// probe per candidate, no allocation, original cumdist-diff weights.
-	// Each survivor replaces the pick with probability weight/totalSoFar,
-	// which yields an exact weighted draw over the filtered set.
-	var pick TokenID
+	if sv.mode == steerBig {
+		// Membership test is a table probe here, so keep the weighted
+		// reservoir (one probe per candidate, no second pass): each
+		// survivor replaces the pick with probability weight/totalSoFar,
+		// an exact weighted draw over the filtered set.
+		var pick TokenID
+		var total uint32
+		var prev uint32
+		for i, tok := range choices {
+			w := cum[i] - prev
+			prev = cum[i]
+			if b.filtered(sv, window, tok, probeBuf) {
+				continue
+			}
+			total += w
+			if b.uint32n(total) < w {
+				pick = tok
+			}
+		}
+		if total == 0 {
+			return 0, false
+		}
+		return pick, true
+	}
+	// Membership test is a cheap compare/scan, so do a two-pass weighted
+	// draw: total the survivors' weights, then draw once and walk. Same
+	// distribution as a draw over the filtered set, but one RNG call
+	// instead of one per survivor — order-1 contexts can have thousands
+	// of candidates.
 	var total uint32
 	var prev uint32
-	for i, tok := range choices {
+	for i := range choices {
 		w := cum[i] - prev
 		prev = cum[i]
-		if b.wouldExtendVerbatim(window, tok, probeBuf) {
-			continue
-		}
-		total += w
-		if b.uint32n(total) < w {
-			pick = tok
+		if !b.filtered(sv, window, choices[i], probeBuf) {
+			total += w
 		}
 	}
 	if total == 0 {
 		return 0, false
 	}
-	return pick, true
+	choiceNum := b.uint32n(total)
+	prev = 0
+	var acc uint32
+	for i := range choices {
+		w := cum[i] - prev
+		prev = cum[i]
+		if b.filtered(sv, window, choices[i], probeBuf) {
+			continue
+		}
+		acc += w
+		if acc > choiceNum {
+			return choices[i], true
+		}
+	}
+	return 0, false // unreachable: acc climbs to total > choiceNum
 }
 
 // uint32n draws from [0, n) using the configured RNG.
