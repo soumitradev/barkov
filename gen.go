@@ -66,11 +66,53 @@ func validateOutputIter[T comparable](inner iter.Seq2[T, error], v func([]T) boo
 }
 
 // Gen collects the iterator into a slice.
+//
+// For the common unconfigured call (no seed, validators, threading, or
+// stuck detection) on a chain that implements FastMoverKey, Gen skips the
+// iterator machinery entirely and runs the walk in a plain loop: same
+// MoveKey sequence, same RNG draws, same output — without the per-token
+// yield call or the per-call config/closure allocations.
 func Gen[T comparable](
 	ctx context.Context,
 	chain GenerativeChain[T],
 	opts ...GenOption[T],
 ) ([]T, error) {
+	if len(opts) == 0 && ctx.Done() == nil {
+		switch chain.StateSize() {
+		case 1:
+			if fm, ok := any(chain).(FastMoverKey[[1]T, T]); ok {
+				return genFastCollect[T, [1]T](chain, fm)
+			}
+		case 2:
+			if fm, ok := any(chain).(FastMoverKey[[2]T, T]); ok {
+				return genFastCollect[T, [2]T](chain, fm)
+			}
+		case 3:
+			if fm, ok := any(chain).(FastMoverKey[[3]T, T]); ok {
+				return genFastCollect[T, [3]T](chain, fm)
+			}
+		case 4:
+			if fm, ok := any(chain).(FastMoverKey[[4]T, T]); ok {
+				return genFastCollect[T, [4]T](chain, fm)
+			}
+		case 5:
+			if fm, ok := any(chain).(FastMoverKey[[5]T, T]); ok {
+				return genFastCollect[T, [5]T](chain, fm)
+			}
+		case 6:
+			if fm, ok := any(chain).(FastMoverKey[[6]T, T]); ok {
+				return genFastCollect[T, [6]T](chain, fm)
+			}
+		case 7:
+			if fm, ok := any(chain).(FastMoverKey[[7]T, T]); ok {
+				return genFastCollect[T, [7]T](chain, fm)
+			}
+		case 8:
+			if fm, ok := any(chain).(FastMoverKey[[8]T, T]); ok {
+				return genFastCollect[T, [8]T](chain, fm)
+			}
+		}
+	}
 	var out []T
 	for tok, err := range GenIter(ctx, chain, opts...) {
 		if err != nil {
@@ -79,6 +121,41 @@ func Gen[T comparable](
 		out = append(out, tok)
 	}
 	return out, nil
+}
+
+// genFastCollect is Gen's plain-config fast path: the state window lives
+// in a stack buffer, one MoveKey per token, output pre-sized for a
+// typical sentence. Mirrors genIterSingleFast with an empty seed and no
+// validator; reaching it requires len(opts)==0, so no option can be
+// silently dropped.
+func genFastCollect[T comparable, K comparable](
+	chain GenerativeChain[T],
+	fm FastMoverKey[K, T],
+) ([]T, error) {
+	sentinels := chain.Sentinels()
+	stateSize := chain.StateSize()
+	var stateBuf [8]T
+	state := stateBuf[:stateSize]
+	for i := range state {
+		state[i] = sentinels.Begin
+	}
+
+	out := make([]T, 0, 32)
+	for {
+		next, err := fm.MoveKey(*(*K)(unsafe.Pointer(&state[0])))
+		if err != nil {
+			return nil, err
+		}
+		if next == sentinels.End {
+			if len(out) == 0 {
+				return nil, nil // match the iterator path's nil-on-empty
+			}
+			return out, nil
+		}
+		out = append(out, next)
+		copy(state, state[1:])
+		state[stateSize-1] = next
+	}
 }
 
 // fillInitialState writes [begin×pad, seed-tail...] into state. The
