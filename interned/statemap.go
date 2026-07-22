@@ -1,7 +1,8 @@
 package interned
 
 import (
-	"hash/maphash"
+	"math/rand/v2"
+	"unsafe"
 )
 
 // stateMap is a purpose-built open-addressed hash table keyed by a
@@ -12,9 +13,14 @@ import (
 // lookup into a single contiguous slot read in the common case.
 //
 // Keys are compared with Go's native == (compiler emits memequal for
-// fixed-size PODs). Hashing goes through maphash.Comparable, which
-// uses the same runtime.memhash the map would have used anyway; the
-// win is in the probe loop, not the hash.
+// fixed-size PODs). Hashing is an inline multiply-xorshift mixer over
+// the key's 8-byte lanes (see hash): sizeof(K) is a compile-time
+// constant per instantiation, so the mixer compiles to straight-line
+// code — no runtime call, unlike maphash.Comparable. The per-map seed
+// keeps placement unpredictable across instances. Note the mixer is
+// not adversary-grade; that is the right trade for corpus-built
+// tables of integer tuples, where multiply mixing is collision-free
+// in practice.
 //
 // V must be comparable and its zero value must be used as the "slot
 // empty" sentinel — callers must never insert a zero-valued V. For
@@ -30,12 +36,47 @@ type stateMap[K comparable, V comparable] struct {
 	// growAt is precomputed len(entries)*loadFactorNum/loadFactorDen so
 	// the hot-path grow check is a single uint32 compare.
 	growAt uint32
-	seed   maphash.Seed
+	seed   uint64
 }
 
 type stateEntry[K comparable, V comparable] struct {
 	key K
 	val V
+}
+
+// lanePrime is the folded-multiply constant shared by wyhash/romu-style
+// mixers; odd and bit-balanced, it gives full 64-bit avalanche per lane.
+const lanePrime = 0x9FB21C651E98DF25
+
+// hash mixes key into a probe hash. The lanes are folded serially
+// (h ^= lane; h *= lanePrime) so equal lanes at different positions
+// cannot cancel, and a final xor-multiply-xor avalanche spreads entropy
+// into the low bits the probe mask consumes. The n >= size guards are
+// compile-time constants per K instantiation, so this compiles to
+// straight-line code with one multiply per 8 bytes of key.
+func (m *stateMap[K, V]) hash(key K) uint64 {
+	n := int(unsafe.Sizeof(key))
+	p := unsafe.Pointer(&key)
+	h := m.seed
+	if n >= 8 {
+		h = (h ^ *(*uint64)(p)) * lanePrime
+	}
+	if n >= 16 {
+		h = (h ^ *(*uint64)(unsafe.Add(p, 8))) * lanePrime
+	}
+	if n >= 24 {
+		h = (h ^ *(*uint64)(unsafe.Add(p, 16))) * lanePrime
+	}
+	if n >= 32 {
+		h = (h ^ *(*uint64)(unsafe.Add(p, 24))) * lanePrime
+	}
+	if n%8 != 0 { // trailing 4-byte lane: n ∈ {4, 12, 20, 28}
+		h = (h ^ uint64(*(*uint32)(unsafe.Add(p, n-4)))) * lanePrime
+	}
+	h ^= h >> 29
+	h *= lanePrime
+	h ^= h >> 32
+	return h
 }
 
 // Grow at 3/5 load. A prior 0.75 attempt cost ~6% of the gen win, but
@@ -60,7 +101,7 @@ func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
 	m := &stateMap[K, V]{
 		entries: make([]stateEntry[K, V], capacity),
 		mask:    uint32(capacity - 1),
-		seed:    maphash.MakeSeed(),
+		seed:    rand.Uint64(),
 	}
 	m.growAt = uint32(capacity) * loadFactorNum / loadFactorDen
 	return m
@@ -68,8 +109,7 @@ func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
 
 // Get returns (val, true) if key is present, else (zero, false).
 func (m *stateMap[K, V]) Get(key K) (V, bool) {
-	h := uint32(maphash.Comparable(m.seed, key))
-	i := h & m.mask
+	i := uint32(m.hash(key)) & m.mask
 	var zero V
 	for {
 		e := &m.entries[i]
@@ -90,8 +130,7 @@ func (m *stateMap[K, V]) GetOrSet(key K, newVal V) (V, bool) {
 	if m.count >= m.growAt {
 		m.grow()
 	}
-	h := uint32(maphash.Comparable(m.seed, key))
-	i := h & m.mask
+	i := uint32(m.hash(key)) & m.mask
 	var zero V
 	for {
 		e := &m.entries[i]
@@ -117,8 +156,7 @@ func (m *stateMap[K, V]) Put(key K, val V) {
 }
 
 func (m *stateMap[K, V]) putNoGrow(key K, val V) {
-	h := uint32(maphash.Comparable(m.seed, key))
-	i := h & m.mask
+	i := uint32(m.hash(key)) & m.mask
 	var zero V
 	for {
 		e := &m.entries[i]
