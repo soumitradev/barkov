@@ -1,0 +1,181 @@
+Post-backoff optimization round (working tree after b7ca96b), 2026-07-22.
+Same machine/go as backoff_e2e.txt (Ryzen 9 7900, go1.26.2), count=6 x2 runs
+combined, benchtime=1s, -benchmem. Baseline = HEAD b7ca96b via git worktree.
+
+Changes, in order of impact:
+1. interned/backoff.go steering: replace the per-candidate order-MaxVerbatim
+   table probe with ONE lookup per step of the order-(MaxVerbatim-1) table.
+   That entry's follower set is exactly the set of tokens completing a
+   verbatim MaxVerbatim-gram, so steering becomes a membership test: == for
+   the ~98% of steering states with one follower, a <=16 linear scan for
+   the rest, per-candidate probes only for high-fanout states (steerBig
+   fallback). End is excluded explicitly (End appears in follower sets but
+   never in an order-R state, preserving "End can never be filtered").
+   Steered gen micro: 3105ms -> 90ms per 10k gens (-97%, ~34x); steered is
+   now within ~0-5% of plain. Semantics pinned by the existing steering
+   tests + TestSteeringOracle (1000 sentences, zero verbatim 6-grams).
+2. interned build: the transient state table IS the final Model now. The
+   corpus scan stores the dense obs index in each slot's ChoicesIndex
+   (Offset=idx+1); the grouping pass overwrites slots in place via
+   stateMap.forEach. Kills the separate rehash+insert pass and its
+   allocation. Table sizing uses measured states/obs ratios per order
+   (0.10/0.45/0.75/0.85 for N=1/2/3/4+) instead of obs+64.
+   BuildIndexedByN: -39%..-60% sec, -53%..-63% B/op.
+3. barkov.Gen fast path: with no options and a non-cancellable ctx, Gen
+   skips the iter.Seq2 machinery and walks MoveKey in a plain loop (same
+   MoveKey/RNG sequence, same output). GenHeavyInterned: -27% sec,
+   -62% B/op, -72% allocs/op.
+4. interned/statemap.go: inline multiply-xorshift lane mixer replaces
+   maphash.Comparable (per-map random seed kept). sizeof(K) is a per-
+   instantiation constant, so the mixer is straight-line code. Probe
+   geometry on the N=4 public-corpus table: avg 0.55, p99 fine at load
+   0.525 (measured pre-merge).
+5. Adaptive <=16-linear / >16-binary cumdist scan in indexedCore.pickFollow,
+   CompressedChain.Move, backoffCore.draw (was sort.Search everywhere /
+   linear-only in draw).
+6. buildBackoffCore builds the per-order tables concurrently (independent
+   builds, corpus read-only). Together with #2 this takes e2e backoff build
+   from ~1.0s to ~0.23-0.27s (-76%..-78%) and cuts B/op -56%.
+
+String Tier-1 path: unchanged. First measurement round showed phantom
++28..+75% regressions on string/* e2e; reverse-order rerun made them
+insignificant (p>=0.06) and interleaved A/B runs of prebuilt binaries on
+string/FNV + string/XXH3 show p=0.886 — thermal ordering drift, not code.
+PipelineSimpleVsMaxOpt/simple: p=0.932 flat.
+
+Full test suite green, including -race on ., ./interned, ./text.
+
+=== benchstat: interned micro (base = b7ca96b) ===
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2/interned
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+                          │ base_interned.txt │          new_interned.txt           │
+                          │      sec/op       │    sec/op     vs base               │
+GenHeavyInterned-24              16.50m ± 40%   11.99m ± 23%  -27.32% (p=0.009 n=6)
+BuildIndexedByN/N=2-24          132.37m ± 30%   56.04m ± 22%  -57.67% (p=0.002 n=6)
+BuildIndexedByN/N=3-24          152.66m ± 16%   60.42m ± 10%  -60.43% (p=0.002 n=6)
+BuildIndexedByN/N=4-24          115.30m ± 19%   52.38m ± 22%  -54.57% (p=0.002 n=6)
+BuildIndexedByN/N=5-24           181.1m ±  9%   103.2m ± 33%  -43.02% (p=0.002 n=6)
+BuildIndexedByN/N=6-24           181.1m ± 10%   101.5m ± 12%  -43.97% (p=0.002 n=6)
+BuildIndexedByN/N=7-24           194.0m ± 10%   106.8m ±  5%  -44.97% (p=0.002 n=6)
+BuildIndexedByN/N=8-24          126.81m ± 29%   76.95m ± 13%  -39.32% (p=0.002 n=6)
+GenBackoff/plain-24             126.91m ± 15%   95.10m ± 15%  -25.06% (p=0.002 n=6)
+GenBackoff/steered-24          3105.08m ±  5%   90.26m ±  6%  -97.09% (p=0.002 n=6)
+GenHeavyIndexedByN/N=2-24       14.358m ± 25%   8.416m ± 48%  -41.38% (p=0.002 n=6)
+GenHeavyIndexedByN/N=3-24        15.82m ± 14%   10.78m ± 43%  -31.83% (p=0.009 n=6)
+GenHeavyIndexedByN/N=4-24        16.67m ±  7%   14.63m ± 44%        ~ (p=0.485 n=6)
+GenHeavyIndexedByN/N=5-24        19.91m ± 14%   15.84m ±  6%  -20.44% (p=0.002 n=6)
+GenHeavyIndexedByN/N=6-24        20.77m ± 10%   15.00m ±  3%  -27.77% (p=0.002 n=6)
+GenHeavyIndexedByN/N=7-24        20.95m ±  5%   18.14m ±  3%  -13.40% (p=0.002 n=6)
+GenHeavyIndexedByN/N=8-24        19.05m ±  4%   18.32m ± 15%        ~ (p=0.394 n=6)
+geomean                          65.56m         34.85m        -46.85%
+
+                          │ base_interned.txt │          new_interned.txt           │
+                          │       B/op        │     B/op      vs base               │
+GenHeavyInterned-24              4.172Mi ± 0%   1.602Mi ± 0%  -61.59% (p=0.002 n=6)
+BuildIndexedByN/N=2-24           51.56Mi ± 0%   22.39Mi ± 0%  -56.57% (p=0.002 n=6)
+BuildIndexedByN/N=3-24           74.88Mi ± 0%   35.15Mi ± 0%  -53.05% (p=0.002 n=6)
+BuildIndexedByN/N=4-24           89.66Mi ± 0%   39.39Mi ± 0%  -56.07% (p=0.002 n=6)
+BuildIndexedByN/N=5-24          104.25Mi ± 0%   43.43Mi ± 0%  -58.35% (p=0.002 n=6)
+BuildIndexedByN/N=6-24          118.81Mi ± 0%   47.44Mi ± 0%  -60.07% (p=0.002 n=6)
+BuildIndexedByN/N=7-24          133.36Mi ± 0%   51.43Mi ± 0%  -61.43% (p=0.002 n=6)
+BuildIndexedByN/N=8-24          147.91Mi ± 0%   55.44Mi ± 0%  -62.52% (p=0.002 n=6)
+GenBackoff/plain-24             11.330Mi ± 0%   8.927Mi ± 0%  -21.21% (p=0.002 n=6)
+GenBackoff/steered-24           11.139Mi ± 0%   8.774Mi ± 0%  -21.23% (p=0.002 n=6)
+GenHeavyIndexedByN/N=2-24        4.225Mi ± 0%   1.692Mi ± 0%  -59.95% (p=0.002 n=6)
+GenHeavyIndexedByN/N=3-24        4.220Mi ± 0%   1.615Mi ± 0%  -61.72% (p=0.002 n=6)
+GenHeavyIndexedByN/N=4-24        4.167Mi ± 0%   1.603Mi ± 0%  -61.54% (p=0.002 n=6)
+GenHeavyIndexedByN/N=5-24        4.143Mi ± 0%   1.602Mi ± 0%  -61.32% (p=0.002 n=6)
+GenHeavyIndexedByN/N=6-24        4.138Mi ± 0%   1.602Mi ± 0%  -61.28% (p=0.002 n=6)
+GenHeavyIndexedByN/N=7-24        4.138Mi ± 0%   1.602Mi ± 0%  -61.28% (p=0.002 n=6)
+GenHeavyIndexedByN/N=8-24        4.137Mi ± 0%   1.602Mi ± 0%  -61.27% (p=0.002 n=6)
+geomean                          17.16Mi        7.443Mi       -56.63%
+
+                          │ base_interned.txt │          new_interned.txt          │
+                          │     allocs/op     │  allocs/op   vs base               │
+GenHeavyInterned-24              109.07k ± 0%   30.00k ± 0%  -72.49% (p=0.002 n=6)
+BuildIndexedByN/N=2-24             144.0 ± 0%    137.0 ± 1%   -4.86% (p=0.002 n=6)
+BuildIndexedByN/N=3-24             144.0 ± 0%    137.0 ± 1%   -4.86% (p=0.002 n=6)
+BuildIndexedByN/N=4-24             144.0 ± 0%    137.5 ± 1%   -4.51% (p=0.002 n=6)
+BuildIndexedByN/N=5-24             144.0 ± 0%    137.0 ± 2%   -4.86% (p=0.002 n=6)
+BuildIndexedByN/N=6-24             144.0 ± 0%    137.0 ± 2%   -4.86% (p=0.002 n=6)
+BuildIndexedByN/N=7-24             144.0 ± 0%    136.0 ± 1%   -5.56% (p=0.002 n=6)
+BuildIndexedByN/N=8-24             144.0 ± 0%    136.0 ± 1%   -5.56% (p=0.002 n=6)
+GenBackoff/plain-24               369.9k ± 0%   299.4k ± 0%  -19.07% (p=0.002 n=6)
+GenBackoff/steered-24             363.4k ± 0%   293.8k ± 0%  -19.17% (p=0.002 n=6)
+GenHeavyIndexedByN/N=2-24        106.10k ± 0%   30.36k ± 0%  -71.39% (p=0.002 n=6)
+GenHeavyIndexedByN/N=3-24        108.56k ± 0%   30.05k ± 0%  -72.32% (p=0.002 n=6)
+GenHeavyIndexedByN/N=4-24        108.98k ± 0%   30.00k ± 0%  -72.47% (p=0.002 n=6)
+GenHeavyIndexedByN/N=5-24        108.90k ± 0%   30.00k ± 0%  -72.45% (p=0.002 n=6)
+GenHeavyIndexedByN/N=6-24        108.88k ± 0%   30.00k ± 0%  -72.45% (p=0.002 n=6)
+GenHeavyIndexedByN/N=7-24        108.88k ± 0%   30.00k ± 0%  -72.45% (p=0.002 n=6)
+GenHeavyIndexedByN/N=8-24        108.88k ± 0%   30.00k ± 0%  -72.45% (p=0.002 n=6)
+geomean                           8.185k        4.271k       -47.82%
+
+=== benchstat: root e2e + pipeline (base = b7ca96b) ===
+goos: linux
+goarch: amd64
+pkg: github.com/soumitradev/barkov/v2
+cpu: AMD Ryzen 9 7900 12-Core Processor             
+                                        │ base_root_all.txt │           new_root_all.txt           │
+                                        │      sec/op       │    sec/op     vs base                │
+BuildCompressed-24                             221.4m ± 13%   244.1m ± 30%        ~ (p=0.101 n=12)
+Gen-24                                         3.978µ ± 15%   4.614µ ± 35%  +15.99% (p=0.017 n=12)
+GenHeavy-24                                    41.45m ± 17%   48.36m ± 22%        ~ (p=0.101 n=12)
+GenWithValidator-24                            3.333µ ± 12%   3.475µ ± 37%        ~ (p=0.143 n=12)
+EndToEndAllConfigs/string/plain-24             234.6m ± 17%   247.6m ± 21%        ~ (p=0.160 n=12)
+EndToEndAllConfigs/string/NGramSet-24          295.5m ±  9%   359.5m ± 25%        ~ (p=0.060 n=12)
+EndToEndAllConfigs/string/FNV-24               258.6m ± 15%   343.1m ± 47%  +32.66% (p=0.000 n=12)
+EndToEndAllConfigs/string/XXH3-24              258.6m ±  9%   301.1m ± 35%  +16.45% (p=0.005 n=12)
+EndToEndAllConfigs/interned/plain-24          146.00m ±  9%   96.90m ± 44%  -33.63% (p=0.008 n=12)
+EndToEndAllConfigs/interned/NGramSet-24        205.0m ± 13%   154.5m ± 28%  -24.64% (p=0.005 n=12)
+EndToEndAllConfigs/interned/FNV-24             157.6m ± 12%   200.8m ± 22%        ~ (p=0.052 n=12)
+EndToEndAllConfigs/interned/XXH3-24            165.8m ± 14%   180.9m ± 36%        ~ (p=0.843 n=12)
+EndToEndAllConfigs/backoff/plain-24           1039.2m ±  7%   252.7m ± 14%  -75.68% (p=0.000 n=12)
+EndToEndAllConfigs/backoff/steered-24         1031.0m ± 16%   226.2m ± 15%  -78.06% (p=0.000 n=12)
+PipelineSimpleVsMaxOpt/simple-24               253.1m ± 18%   256.0m ±  7%        ~ (p=0.932 n=12)
+PipelineSimpleVsMaxOpt/maxopt-24              147.22m ± 13%   87.71m ± 15%  -40.42% (p=0.000 n=12)
+geomean                                        58.26m         49.29m        -15.39%
+
+                                        │ base_root_all.txt │            new_root_all.txt            │
+                                        │       B/op        │     B/op      vs base                  │
+BuildCompressed-24                             156.6Mi ± 0%   156.6Mi ± 0%        ~ (p=0.570 n=12)
+Gen-24                                         1.081Ki ± 0%   1.081Ki ± 0%        ~ (p=1.000 n=12)
+GenHeavy-24                                    10.56Mi ± 0%   10.57Mi ± 0%   +0.08% (p=0.000 n=12)
+GenWithValidator-24                            2.122Ki ± 0%   2.122Ki ± 0%        ~ (p=1.000 n=12) ¹
+EndToEndAllConfigs/string/plain-24             156.6Mi ± 0%   156.6Mi ± 0%        ~ (p=0.720 n=12)
+EndToEndAllConfigs/string/NGramSet-24          205.2Mi ± 0%   205.2Mi ± 0%        ~ (p=0.521 n=12)
+EndToEndAllConfigs/string/FNV-24               170.1Mi ± 0%   170.1Mi ± 0%   +0.00% (p=0.023 n=12)
+EndToEndAllConfigs/string/XXH3-24              170.1Mi ± 0%   170.1Mi ± 0%        ~ (p=0.966 n=12)
+EndToEndAllConfigs/interned/plain-24          101.51Mi ± 0%   51.24Mi ± 0%  -49.52% (p=0.000 n=12)
+EndToEndAllConfigs/interned/NGramSet-24       133.76Mi ± 0%   83.52Mi ± 0%  -37.56% (p=0.000 n=12)
+EndToEndAllConfigs/interned/FNV-24            115.00Mi ± 0%   64.75Mi ± 0%  -43.70% (p=0.000 n=12)
+EndToEndAllConfigs/interned/XXH3-24           115.03Mi ± 0%   64.76Mi ± 0%  -43.70% (p=0.000 n=12)
+EndToEndAllConfigs/backoff/plain-24            484.6Mi ± 0%   214.6Mi ± 0%  -55.71% (p=0.000 n=12)
+EndToEndAllConfigs/backoff/steered-24          484.6Mi ± 0%   214.6Mi ± 0%  -55.71% (p=0.000 n=12)
+PipelineSimpleVsMaxOpt/simple-24               156.6Mi ± 0%   156.6Mi ± 0%        ~ (p=0.853 n=12)
+PipelineSimpleVsMaxOpt/maxopt-24              101.50Mi ± 0%   51.21Mi ± 0%  -49.55% (p=0.000 n=12)
+geomean                                        33.27Mi        24.93Mi       -25.06%
+¹ all samples are equal
+
+                                        │ base_root_all.txt │           new_root_all.txt           │
+                                        │     allocs/op     │  allocs/op   vs base                 │
+BuildCompressed-24                              4.245k ± 0%   4.245k ± 0%       ~ (p=1.000 n=12) ¹
+Gen-24                                           13.00 ± 0%    13.00 ± 0%       ~ (p=1.000 n=12) ¹
+GenHeavy-24                                     139.0k ± 0%   139.0k ± 0%  -0.00% (p=0.047 n=12)
+GenWithValidator-24                              16.00 ± 0%    16.00 ± 0%       ~ (p=1.000 n=12) ¹
+EndToEndAllConfigs/string/plain-24              4.258k ± 0%   4.258k ± 0%       ~ (p=1.000 n=12)
+EndToEndAllConfigs/string/NGramSet-24           5.815k ± 0%   5.815k ± 0%       ~ (p=0.966 n=12)
+EndToEndAllConfigs/string/FNV-24                5.809k ± 0%   5.809k ± 0%       ~ (p=0.216 n=12)
+EndToEndAllConfigs/string/XXH3-24               5.809k ± 0%   5.809k ± 0%       ~ (p=0.922 n=12)
+EndToEndAllConfigs/interned/plain-24            52.51k ± 0%   52.50k ± 0%  -0.02% (p=0.000 n=12)
+EndToEndAllConfigs/interned/NGramSet-24         54.06k ± 0%   54.05k ± 0%  -0.01% (p=0.006 n=12)
+EndToEndAllConfigs/interned/FNV-24              54.05k ± 0%   54.05k ± 0%  -0.01% (p=0.000 n=12)
+EndToEndAllConfigs/interned/XXH3-24             54.06k ± 0%   54.05k ± 0%  -0.01% (p=0.000 n=12)
+EndToEndAllConfigs/backoff/plain-24             53.24k ± 0%   53.21k ± 0%  -0.05% (p=0.000 n=12)
+EndToEndAllConfigs/backoff/steered-24           53.25k ± 0%   53.21k ± 0%  -0.08% (p=0.000 n=12)
+PipelineSimpleVsMaxOpt/simple-24                4.259k ± 0%   4.259k ± 0%       ~ (p=0.667 n=12)
+PipelineSimpleVsMaxOpt/maxopt-24                52.51k ± 0%   52.49k ± 0%  -0.03% (p=0.000 n=12)
+geomean                                         8.332k        8.331k       -0.01%
+¹ all samples are equal
