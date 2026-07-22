@@ -3,6 +3,7 @@ package interned
 import (
 	"fmt"
 	"math/rand/v2"
+	"sync"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -358,13 +359,21 @@ func (b *backoffCore) draw(cum []uint32) int {
 }
 
 // buildBackoffCore builds one indexedCore per order 1..MaxOrder, one
-// corpus pass each. Build is a rare event (corpus refreshes); fusing the
-// passes is deliberately out of scope.
+// corpus pass each. The per-order builds are independent (corpus is
+// read-only, each goroutine writes its own table slot), so they run
+// concurrently — a MaxOrder-6 build is six full passes, and wall time
+// drops to roughly the slowest single pass on multicore machines.
 func buildBackoffCore(cfg BackoffConfig, corpus [][]TokenID) *backoffCore {
 	tables := make([]orderTable, cfg.MaxOrder)
+	var wg sync.WaitGroup
 	for m := 1; m <= cfg.MaxOrder; m++ {
-		tables[m-1] = buildOrderTable(m, corpus)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tables[m-1] = buildOrderTable(m, corpus)
+		}()
 	}
+	wg.Wait()
 	return &backoffCore{
 		tables:    tables,
 		cfg:       cfg,
