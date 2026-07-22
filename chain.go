@@ -623,7 +623,23 @@ func (cc *CompressedChain[T]) Move(state string) (T, error) {
 	} else {
 		choiceNum = rand.Uint32N(cumDist[len(cumDist)-1])
 	}
-	return choices[sort.Search(len(cumDist), func(i int) bool { return cumDist[i] > choiceNum })], nil
+	return choices[scanCumDist(cumDist, choiceNum)], nil
+}
+
+// scanCumDist returns the first index whose cumulative weight exceeds
+// choiceNum. State fanout averages ~1.1-1.8 on prose, so a linear scan
+// wins for small groups; begin-state fanouts in the thousands flip the
+// crossover to binary search.
+func scanCumDist(cum []uint32, choiceNum uint32) int {
+	if len(cum) <= 16 {
+		for i, c := range cum {
+			if c > choiceNum {
+				return i
+			}
+		}
+		return len(cum) - 1 // unreachable: choiceNum < cum[len-1]
+	}
+	return sort.Search(len(cum), func(i int) bool { return cum[i] > choiceNum })
 }
 
 // MoveTokens is a convenience wrapper that encodes the state for the caller.

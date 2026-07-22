@@ -3,7 +3,6 @@ package interned
 import (
 	"fmt"
 	"math/rand/v2"
-	"sort"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -54,7 +53,7 @@ func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
 	} else {
 		choiceNum = rand.Uint32N(cumDist[len(cumDist)-1])
 	}
-	return choices[sort.Search(len(cumDist), func(i int) bool { return cumDist[i] > choiceNum })]
+	return choices[scanCumDist(cumDist, choiceNum)]
 }
 
 // MoveKey satisfies barkov.FastMoverKey[K, TokenID]. Gen uses this path

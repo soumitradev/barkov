@@ -3,6 +3,7 @@ package interned
 import (
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -343,19 +344,24 @@ func (b *backoffCore) uint32n(n uint32) uint32 {
 
 // draw picks an index into a cumulative distribution by weight.
 func (b *backoffCore) draw(cum []uint32) int {
-	var choiceNum uint32
-	if b.rng != nil {
-		choiceNum = b.rng.Uint32N(cum[len(cum)-1])
-	} else {
-		choiceNum = rand.Uint32N(cum[len(cum)-1])
-	}
-	// Fanout averages ~1.1-1.8; linear scan beats sort.Search at that size.
-	for i, c := range cum {
-		if c > choiceNum {
-			return i
+	choiceNum := b.uint32n(cum[len(cum)-1])
+	return scanCumDist(cum, choiceNum)
+}
+
+// scanCumDist returns the first index whose cumulative weight exceeds
+// choiceNum. Fanout averages ~1.1-1.8, so a linear scan wins for small
+// groups; begin-state fanouts in the thousands flip the crossover to
+// binary search.
+func scanCumDist(cum []uint32, choiceNum uint32) int {
+	if len(cum) <= 16 {
+		for i, c := range cum {
+			if c > choiceNum {
+				return i
+			}
 		}
+		return len(cum) - 1 // unreachable: choiceNum < cum[len-1]
 	}
-	return len(cum) - 1 // unreachable: choiceNum < cum[len-1]
+	return sort.Search(len(cum), func(i int) bool { return cum[i] > choiceNum })
 }
 
 // buildBackoffCore builds one indexedCore per order 1..MaxOrder, one
