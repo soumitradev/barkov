@@ -147,14 +147,6 @@ func (m *stateMap[K, V]) GetOrSet(key K, newVal V) (V, bool) {
 	}
 }
 
-// Put overwrites any existing entry for key.
-func (m *stateMap[K, V]) Put(key K, val V) {
-	if m.count >= m.growAt {
-		m.grow()
-	}
-	m.putNoGrow(key, val)
-}
-
 func (m *stateMap[K, V]) putNoGrow(key K, val V) {
 	i := uint32(m.hash(key)) & m.mask
 	var zero V
