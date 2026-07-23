@@ -1,4 +1,4 @@
-# v1 → v2 migration
+# v1 to v2 migration
 
 Every public API change from `v1.0.3` to `v2.0.0`. The short version: generics, functional gen options, and a subpackage split.
 
@@ -27,7 +27,7 @@ chain, vocab := interned.InitChain(4)
 ```
 After:
 ```go
-compressed := interned.Build(4, encoded) // stateSize 2..8, returns GenerativeChain[TokenID]
+compressed := interned.Build(4, encoded) // stateSize 1..8, returns GenerativeChain[TokenID]
 // reach concrete behavior via interface assertion:
 compressed.(barkov.RNGSettable).SetRNG(r)
 // InitChain's job, spelled out:
@@ -272,10 +272,10 @@ import "github.com/soumitradev/barkov/v2/interned"
 
 vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-compressed := interned.Build(4, encoded) // stateSize 2..8
+compressed := interned.Build(4, encoded) // stateSize 1..8
 ```
 
-`interned.Build(stateSize, corpus)` returns a `GenerativeChain[TokenID]` and is the single entry point for stateSizes 2..8. The per-N types and constructors (`IndexedCompressedChain4`, `BuildCompressedIndexed4`, and the `BuildCompressedIndexed` dispatcher) are gone. If you need the concrete affordances, assert for the interface: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
+`interned.Build(stateSize, corpus)` returns a `GenerativeChain[TokenID]` and is the single entry point for stateSizes 1..8. The per-N types and constructors (`IndexedCompressedChain4`, `BuildCompressedIndexed4`, and the `BuildCompressedIndexed` dispatcher) are gone. If you need the concrete affordances, assert for the interface: `compressed.(barkov.RNGSettable).SetRNG(r)` for a deterministic RNG, or `compressed.(barkov.FastMoverKey[[4]interned.TokenID, interned.TokenID])` for direct `MoveKey`.
 
 `interned.InitChain(stateSize)` (the `(*Chain[TokenID], *Vocabulary)` tuple) is also removed. Build the pieces directly:
 
