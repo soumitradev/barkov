@@ -1,5 +1,5 @@
 // Tier 1: drop-in string chain. No interning, no custom hashers, no
-// validator. The fastest path to "give me a markov chain" — three lines
+// validator. The fastest path to "give me a markov chain": three lines
 // of setup, then generate.
 package main
 
@@ -25,7 +25,7 @@ func main() {
 
 	chain := barkov.InitChain(2).BuildCompressed(corpus)
 
-	fmt.Println("Tier 1 — string chain, no validator:")
+	fmt.Println("Tier 1: string chain, no validator:")
 	for i := range 5 {
 		out, err := barkov.Gen(context.Background(), chain)
 		if err != nil {
@@ -34,4 +34,20 @@ func main() {
 		}
 		fmt.Printf("%d) %s\n", i+1, strings.Join(out, " "))
 	}
+
+	// GenIter streams the same walk token by token instead of collecting
+	// a slice. Stop whenever you like by breaking out of the loop.
+	fmt.Println("\nStreaming with GenIter, seeded, stopping after 8 tokens:")
+	n := 0
+	for tok, err := range barkov.GenIter(context.Background(), chain, barkov.WithSeed([]string{"the"})) {
+		if err != nil {
+			break
+		}
+		fmt.Print(tok, " ")
+		n++
+		if n >= 8 {
+			break
+		}
+	}
+	fmt.Println()
 }

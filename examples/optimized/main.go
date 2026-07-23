@@ -10,7 +10,7 @@
 //   - WithThreaded to fan out generation attempts and return the first
 //     that clears the validator.
 //
-// stateSize stays configurable — pick whatever matches your use case.
+// stateSize stays configurable; pick whatever matches your use case.
 // (If yours happens to be 4, see the callout at the bottom of this
 // file for an extra specialisation.)
 package main
@@ -47,7 +47,7 @@ func main() {
 	encoded := vocab.InternCorpus(corpus)
 	compressed := chain.BuildCompressed(encoded)
 
-	fmt.Println("Tier 2 — interned + generic CompressedChain, no validator:")
+	fmt.Println("Tier 2: interned + generic CompressedChain, no validator:")
 	for i := range 5 {
 		out, err := barkov.Gen(context.Background(), compressed)
 		if err != nil {
@@ -60,7 +60,7 @@ func main() {
 	// xxh3-hashed anti-verbatim validator. On a real corpus this rejects
 	// generations that reproduce a corpus n-gram verbatim. On a toy corpus
 	// most outputs are verbatim by construction, so the validator rejects
-	// nearly every attempt — that's expected. WithThreaded retries.
+	// nearly every attempt. That's expected. WithThreaded retries.
 	validator := nhash.New(
 		encoded,
 		compressed.StateSize()+2,
@@ -68,7 +68,7 @@ func main() {
 		xxh3.XXH3{},
 	).Validator()
 
-	fmt.Println("\nTier 2 — same chain, with xxh3-hashed anti-verbatim validator:")
+	fmt.Println("\nTier 2: same chain, with xxh3-hashed anti-verbatim validator:")
 	for i := range 5 {
 		out, err := barkov.Gen(
 			context.Background(),

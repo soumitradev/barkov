@@ -1,5 +1,5 @@
 // Tier 3: custom token type. The corpus is int64 (could be anything
-// comparable — user IDs, event codes, enum values). The user provides
+// comparable: user IDs, event codes, enum values). The user provides
 // their own encoder; barkov never assumes strings.
 //
 // The encoder implements both StateEncoder and AppendEncoder; the
@@ -59,7 +59,7 @@ func main() {
 	})
 	compressed := chain.BuildCompressed(corpus)
 
-	fmt.Println("Tier 3 — int64 chain with custom encoder:")
+	fmt.Println("Tier 3: int64 chain with custom encoder:")
 	for i := range 5 {
 		out, err := barkov.Gen(context.Background(), compressed)
 		if err != nil {
