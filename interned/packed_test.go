@@ -52,3 +52,29 @@ func TestPackedEncoderAppendEquivalence(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkPackedEncoderAppend(b *testing.B) {
+	enc := PackedEncoder{}
+	ids := make([]TokenID, 30)
+	for i := range ids {
+		ids[i] = TokenID(i + 10)
+	}
+	var buf [256]byte
+	b.ResetTimer()
+	for b.Loop() {
+		_ = enc.AppendEncoded(buf[:0], ids)
+	}
+}
+
+func BenchmarkPackedEncoderDecode(b *testing.B) {
+	enc := PackedEncoder{}
+	ids := make([]TokenID, 30)
+	for i := range ids {
+		ids[i] = TokenID(i + 10)
+	}
+	str := enc.Encode(ids)
+	b.ResetTimer()
+	for b.Loop() {
+		_ = enc.Decode(str)
+	}
+}

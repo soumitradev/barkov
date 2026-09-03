@@ -466,3 +466,59 @@ func TestGeneratorSetRNG(t *testing.T) {
 		}
 	}
 }
+
+func loadPublicCorpusBench() [][]string {
+	f, err := os.Open("../testdata/corpus_public.txt")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	var corpus [][]string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, "***") || strings.HasPrefix(line, "  ") {
+			continue
+		}
+		if tokens := strings.Fields(line); len(tokens) >= 4 {
+			corpus = append(corpus, tokens)
+		}
+	}
+	return corpus
+}
+
+func BenchmarkTextNew(b *testing.B) {
+	corpus := loadPublicCorpusBench()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = text.New(corpus, text.Order(4))
+	}
+}
+
+func BenchmarkTextGenerate(b *testing.B) {
+	corpus := loadPublicCorpusBench()
+	g, err := text.New(corpus, text.Order(4))
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = g.Generate(ctx)
+	}
+}
+
+func BenchmarkTextSeedMiddle(b *testing.B) {
+	corpus := loadPublicCorpusBench()
+	g, err := text.New(corpus, text.Order(4), text.Bidirectional())
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	seed := []string{"the", "ship"}
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = g.Generate(ctx, text.SeedMiddle(seed))
+	}
+}
