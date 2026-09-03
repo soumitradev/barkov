@@ -113,12 +113,31 @@ func Gen[T comparable](
 			}
 		}
 	}
-	var out []T
-	for tok, err := range GenIter(ctx, chain, opts...) {
+	cfg := &genConfig[T]{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if cfg.parallelism > 1 {
+		out := make([]T, 0, 32)
+		for tok, err := range genIterThreaded(ctx, chain, cfg) {
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, tok)
+		}
+		return out, nil
+	}
+
+	out := make([]T, 0, 32)
+	for tok, err := range genIterSingle(ctx, chain, cfg) {
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, tok)
+	}
+	if cfg.outputValidator != nil && !cfg.outputValidator(out) {
+		return nil, fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation)
 	}
 	return out, nil
 }
