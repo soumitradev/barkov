@@ -46,4 +46,5 @@ var (
 	_ barkov.FastMoverKey[[8]TokenID, TokenID] = (*backoffChain8)(nil)
 
 	_ barkov.RNGSettable = (*backoffChain6)(nil)
+	_ BackoffChain       = (*backoffChain6)(nil)
 )

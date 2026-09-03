@@ -1,6 +1,7 @@
 package interned
 
 import (
+	"iter"
 	"math/rand/v2"
 	"unsafe"
 )
@@ -190,6 +191,20 @@ func (m *stateMap[K, V]) forEach(f func(key K, val *V)) {
 		e := &m.entries[i]
 		if e.val != zero {
 			f(e.key, &e.val)
+		}
+	}
+}
+
+// All yields every live entry in slot order.
+func (m *stateMap[K, V]) All() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		var zero V
+		for i := range m.entries {
+			if m.entries[i].val != zero {
+				if !yield(m.entries[i].key, m.entries[i].val) {
+					return
+				}
+			}
 		}
 	}
 }

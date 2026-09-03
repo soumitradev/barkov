@@ -2,6 +2,7 @@ package interned
 
 import (
 	"fmt"
+	"iter"
 	"math/rand/v2"
 	"sort"
 	"sync"
@@ -23,6 +24,16 @@ type BackoffConfig struct {
 	// candidates that would extend a run to this length. 0 = default
 	// (MaxOrder); -1 = disabled; else 2..MaxOrder.
 	MaxVerbatim int
+}
+
+// BackoffChain is a backoff engine chain that supports state iteration
+// across its orders and RNG configuration.
+type BackoffChain interface {
+	barkov.GenerativeChain[TokenID]
+	barkov.RNGSettable
+	// States iterates all states at order (1..MaxOrder) with their total
+	// transition observation counts.
+	States(order int) iter.Seq2[[]TokenID, uint32]
 }
 
 // withDefaults validates cfg and fills zero values with defaults. Panics
@@ -58,6 +69,8 @@ type orderTable interface {
 	lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool)
 	// slices resolves a Count>1 index to its choices/cumdist views.
 	slices(idx barkov.ChoicesIndex) (choices []TokenID, cum []uint32)
+	// states iterates all states in the table with their total observation counts.
+	states() iter.Seq2[[]TokenID, uint32]
 }
 
 // lookupTail implements orderTable. tail's backing array has at least
@@ -71,6 +84,25 @@ func (c *indexedCore[K]) lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool) 
 func (c *indexedCore[K]) slices(idx barkov.ChoicesIndex) ([]TokenID, []uint32) {
 	return c.Choices[idx.Offset : idx.Offset+uint32(idx.Count)],
 		c.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+}
+
+// states implements orderTable.
+func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
+	return func(yield func([]TokenID, uint32) bool) {
+		for k, idx := range c.Model.All() {
+			var total uint32
+			if idx.Count == 1 {
+				total = uint32(idx.Obs)
+			} else {
+				total = c.CumDist[idx.Offset+uint32(idx.Count)-1]
+			}
+			tokens := make([]TokenID, c.stateSize)
+			copy(tokens, unsafe.Slice((*TokenID)(unsafe.Pointer(&k)), c.stateSize))
+			if !yield(tokens, total) {
+				return
+			}
+		}
+	}
 }
 
 // backoffCore does the variable-order walk over a stack of per-order
@@ -90,6 +122,15 @@ type backoffCore struct {
 // SetRNG overrides the random source used by the walk. Intended for
 // deterministic tests and benchmarks; not safe for concurrent use.
 func (b *backoffCore) SetRNG(r *rand.Rand) { b.rng = r }
+
+// States iterates all states at the given order (1..MaxOrder) with their
+// total observation count (total transitions observed from that state).
+func (b *backoffCore) States(order int) iter.Seq2[[]TokenID, uint32] {
+	if order < 1 || order > len(b.tables) {
+		return func(yield func([]TokenID, uint32) bool) {}
+	}
+	return b.tables[order-1].states()
+}
 
 func (b *backoffCore) StateSize() int                        { return b.cfg.MaxOrder }
 func (b *backoffCore) Sentinels() barkov.Sentinels[TokenID]  { return b.sentinels }

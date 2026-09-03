@@ -323,3 +323,52 @@ func TestBackoffConfigValidation(t *testing.T) {
 		}()
 	}
 }
+
+func TestBackoffStatesIteration(t *testing.T) {
+	vocab := NewVocabulary()
+	corpus := vocab.InternCorpus([][]string{
+		{"the", "quick", "brown", "fox"},
+		{"the", "lazy", "dog"},
+	})
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3}, corpus).(BackoffChain)
+
+	// Order 1 states
+	order1States := make(map[TokenID]uint32)
+	for tokens, obs := range chain.States(1) {
+		if len(tokens) != 1 {
+			t.Fatalf("expected 1 token for order 1, got %d", len(tokens))
+		}
+		order1States[tokens[0]] = obs
+	}
+	theID, _ := vocab.Lookup("the")
+	if obs, ok := order1States[theID]; !ok || obs != 2 {
+		t.Errorf("expected 'the' in order 1 with obs 2, got obs %d (ok=%v)", obs, ok)
+	}
+
+	// Order 2 states
+	order2Count := 0
+	for tokens, obs := range chain.States(2) {
+		if len(tokens) != 2 {
+			t.Fatalf("expected 2 tokens for order 2, got %d", len(tokens))
+		}
+		if obs == 0 {
+			t.Errorf("expected obs > 0 for order 2 state %v", tokens)
+		}
+		order2Count++
+	}
+	if order2Count == 0 {
+		t.Error("expected >0 order 2 states")
+	}
+
+	// Order out of bounds returns empty iterator
+	emptyCount := 0
+	for range chain.States(0) {
+		emptyCount++
+	}
+	for range chain.States(4) {
+		emptyCount++
+	}
+	if emptyCount != 0 {
+		t.Errorf("expected 0 states for out-of-bounds orders, got %d", emptyCount)
+	}
+}
