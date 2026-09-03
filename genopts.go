@@ -41,6 +41,7 @@ type genConfig[T comparable] struct {
 	stuckCache      StuckDetector
 	pool            SlicePool[T]
 	outputValidator func([]T) bool
+	maxTokens       int
 }
 
 // WithSeed prepends seed tokens to the generated sequence.
@@ -72,6 +73,14 @@ func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
 // v, then replays it through the iterator.
 func WithOutputValidator[T comparable](v func([]T) bool) GenOption[T] {
 	return func(c *genConfig[T]) { c.outputValidator = v }
+}
+
+// WithMaxTokens sets a maximum length (in non-sentinel tokens) for the
+// generated sequence, including any seed tokens. If generation reaches
+// this limit without hitting the End sentinel, the attempt is aborted
+// with ErrSentenceFailedValidation.
+func WithMaxTokens[T comparable](n int) GenOption[T] {
+	return func(c *genConfig[T]) { c.maxTokens = n }
 }
 
 // WithNGramValidator installs a WindowValidator — a per-window validator

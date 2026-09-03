@@ -290,6 +290,18 @@ func genIterSingle[T comparable](
 			return
 		}
 
+		emitted := 0
+		for _, tok := range cfg.seed {
+			if tok != sentinels.Begin && tok != sentinels.End {
+				emitted++
+			}
+		}
+		if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
+			var zero T
+			yield(zero, fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", cfg.maxTokens, ErrSentenceFailedValidation))
+			return
+		}
+
 		// See genIterSingleFast for the rationale on hoisting ctx.Done().
 		done := ctx.Done()
 		for {
@@ -317,6 +329,13 @@ func genIterSingle[T comparable](
 				return
 			}
 			if next == sentinels.End {
+				return
+			}
+
+			emitted++
+			if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
+				var zero T
+				yield(zero, fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", cfg.maxTokens, ErrSentenceFailedValidation))
 				return
 			}
 
@@ -387,6 +406,18 @@ func genIterSingleFast[T comparable, K comparable](
 			return
 		}
 
+		emitted := 0
+		for _, tok := range cfg.seed {
+			if tok != sentinels.Begin && tok != sentinels.End {
+				emitted++
+			}
+		}
+		if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
+			var zero T
+			yield(zero, fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", cfg.maxTokens, ErrSentenceFailedValidation))
+			return
+		}
+
 		// Hoist ctx.Done() out of the per-token loop. context.Background()
 		// (and any context with no deadline/cancellation) returns a nil
 		// channel from Done(); receiving from nil blocks forever, so the
@@ -417,6 +448,13 @@ func genIterSingleFast[T comparable, K comparable](
 				return
 			}
 			if next == sentinels.End {
+				return
+			}
+
+			emitted++
+			if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
+				var zero T
+				yield(zero, fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", cfg.maxTokens, ErrSentenceFailedValidation))
 				return
 			}
 

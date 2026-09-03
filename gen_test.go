@@ -397,3 +397,51 @@ func TestWithNGramValidator(t *testing.T) {
 		}
 	})
 }
+
+func TestWithMaxTokens(t *testing.T) {
+	// Corpus sentence: "the quick brown fox jumps over the lazy dog" (9 tokens)
+	corpus := [][]string{{"the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"}}
+	chain := InitChain(2).BuildCompressed(corpus)
+	ctx := context.Background()
+
+	t.Run("UnderLimitSucceeds", func(t *testing.T) {
+		out, err := Gen(ctx, chain, WithMaxTokens[string](10))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(out) > 10 {
+			t.Fatalf("expected <= 10 tokens, got %d: %v", len(out), out)
+		}
+	})
+
+	t.Run("ExactLimitSucceeds", func(t *testing.T) {
+		out, err := Gen(ctx, chain, WithMaxTokens[string](9))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(out) != 9 {
+			t.Fatalf("expected 9 tokens, got %d: %v", len(out), out)
+		}
+	})
+
+	t.Run("OverLimitFailsValidation", func(t *testing.T) {
+		_, err := Gen(ctx, chain, WithMaxTokens[string](5))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, ErrSentenceFailedValidation) {
+			t.Fatalf("expected ErrSentenceFailedValidation, got: %v", err)
+		}
+	})
+
+	t.Run("SeedExceedingLimitFailsValidation", func(t *testing.T) {
+		seed := []string{"one", "two", "three", "four", "five", "six"}
+		_, err := Gen(ctx, chain, WithSeed(seed), WithMaxTokens[string](4))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, ErrSentenceFailedValidation) {
+			t.Fatalf("expected ErrSentenceFailedValidation, got: %v", err)
+		}
+	})
+}
