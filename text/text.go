@@ -22,6 +22,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -64,6 +65,16 @@ type Option func(*config)
 // variable-length contexts up to Order+2 tokens (longest first, backing
 // off where the corpus is thin), and anti-verbatim protection defaults
 // to window Order+2.
+//
+// Mapping from text.Order to the underlying interned.BackoffConfig:
+//
+//	| text.Order | interned.MaxOrder | Default Steering Window |
+//	|------------|-------------------|-------------------------|
+//	| 2          | 4                 | 4                       |
+//	| 3          | 5                 | 5                       |
+//	| 4 (def)    | 6                 | 6                       |
+//	| 5          | 7                 | 7                       |
+//	| 6..8       | 8                 | 8                       |
 func Order(n int) Option { return func(c *config) { c.order = n } }
 
 // Timeout is the per-Generate time budget applied to the context. Default
@@ -167,49 +178,71 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 
 	vocab := interned.NewVocabulary()
 	encoded := vocab.InternCorpus(corpus)
-	chain := interned.BuildBackoff(interned.BackoffConfig{
-		MaxOrder:    maxOrder,
-		MaxVerbatim: maxVerbatim,
-	}, encoded)
-	if cfg.rng != nil {
-		s, ok := chain.(barkov.RNGSettable)
-		if !ok {
-			return nil, errors.New("text: engine does not support RNG")
-		}
-		s.SetRNG(cfg.rng)
-	}
 
-	g := &Generator{
-		chain:     chain,
-		vocab:     vocab,
-		timeout:   cfg.timeout,
-		retries:   cfg.retries,
-		threads:   cfg.threads,
-		maxTokens: cfg.maxTokens,
-	}
+	var (
+		chain    barkov.GenerativeChain[interned.TokenID]
+		revChain barkov.GenerativeChain[interned.TokenID]
+		messages *interned.MessageSet
+		wg       sync.WaitGroup
+	)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		chain = interned.BuildBackoff(interned.BackoffConfig{
+			MaxOrder:    maxOrder,
+			MaxVerbatim: maxVerbatim,
+		}, encoded)
+	}()
 
 	if cfg.antiVerbatim != 0 {
-		g.messages = interned.NewMessageSet(encoded)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			messages = interned.NewMessageSet(encoded)
+		}()
 	}
 
 	if cfg.bidirectional {
-		reversedEncoded := make([][]interned.TokenID, len(encoded))
-		for i, msg := range encoded {
-			rev := make([]interned.TokenID, len(msg))
-			copy(rev, msg)
-			slices.Reverse(rev)
-			reversedEncoded[i] = rev
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reversedEncoded := make([][]interned.TokenID, len(encoded))
+			for i, msg := range encoded {
+				rev := make([]interned.TokenID, len(msg))
+				copy(rev, msg)
+				slices.Reverse(rev)
+				reversedEncoded[i] = rev
+			}
+			revChain = interned.BuildBackoff(interned.BackoffConfig{
+				MaxOrder:    maxOrder,
+				MaxVerbatim: maxVerbatim,
+			}, reversedEncoded)
+		}()
+	}
+
+	wg.Wait()
+
+	if cfg.rng != nil {
+		if s, ok := chain.(barkov.RNGSettable); ok {
+			s.SetRNG(cfg.rng)
 		}
-		revChain := interned.BuildBackoff(interned.BackoffConfig{
-			MaxOrder:    maxOrder,
-			MaxVerbatim: maxVerbatim,
-		}, reversedEncoded)
-		if cfg.rng != nil {
+		if revChain != nil {
 			if s, ok := revChain.(barkov.RNGSettable); ok {
 				s.SetRNG(cfg.rng)
 			}
 		}
-		g.reverseChain = revChain
+	}
+
+	g := &Generator{
+		chain:        chain,
+		reverseChain: revChain,
+		vocab:        vocab,
+		timeout:      cfg.timeout,
+		retries:      cfg.retries,
+		threads:      cfg.threads,
+		maxTokens:    cfg.maxTokens,
+		messages:     messages,
 	}
 
 	return g, nil
@@ -340,31 +373,51 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		fwd, err := barkov.Gen(ctx, g.chain, fwdOpts...)
-		if err != nil {
-			if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
-				return nil, err
-			}
-			lastErr = err
-			continue
+
+		var (
+			fwd, bwd       []interned.TokenID
+			fwdErr, bwdErr error
+			wg             sync.WaitGroup
+		)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
+		}()
+		go func() {
+			defer wg.Done()
+			bwd, bwdErr = barkov.Gen(ctx, g.reverseChain, bwdOpts...)
+		}()
+		wg.Wait()
+
+		if fwdErr != nil && !errors.Is(fwdErr, barkov.ErrSentenceFailedValidation) {
+			return nil, fwdErr
 		}
-		bwd, err := barkov.Gen(ctx, g.reverseChain, bwdOpts...)
-		if err != nil {
-			if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
-				return nil, err
-			}
-			lastErr = err
-			continue
+		if bwdErr != nil && !errors.Is(bwdErr, barkov.ErrSentenceFailedValidation) {
+			return nil, bwdErr
 		}
 
-		slices.Reverse(bwd)
-		prefixLen := len(bwd) - len(seed)
-		if prefixLen < 0 {
-			prefixLen = 0
+		var spliced []interned.TokenID
+		if fwdErr == nil && bwdErr == nil {
+			slices.Reverse(bwd)
+			prefixLen := len(bwd) - len(seed)
+			if prefixLen < 0 {
+				prefixLen = 0
+			}
+			spliced = make([]interned.TokenID, 0, prefixLen+len(fwd))
+			spliced = append(spliced, bwd[:prefixLen]...)
+			spliced = append(spliced, fwd...)
+		} else if fwdErr == nil {
+			// Graceful fallback to forward half if backward failed
+			spliced = fwd
+		} else if bwdErr == nil {
+			// Graceful fallback to backward half if forward failed
+			slices.Reverse(bwd)
+			spliced = bwd
+		} else {
+			lastErr = fwdErr
+			continue
 		}
-		spliced := make([]interned.TokenID, 0, prefixLen+len(fwd))
-		spliced = append(spliced, bwd[:prefixLen]...)
-		spliced = append(spliced, fwd...)
 
 		if gc.maxTokens > 0 && len(spliced) > gc.maxTokens {
 			lastErr = fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", gc.maxTokens, barkov.ErrSentenceFailedValidation)
@@ -443,6 +496,35 @@ func (g *Generator) ReverseChain() barkov.GenerativeChain[interned.TokenID] { re
 // Vocab returns the vocabulary that maps between strings and the TokenIDs
 // the Chain uses.
 func (g *Generator) Vocab() *interned.Vocabulary { return g.vocab }
+
+// Contains reports whether word exists in the vocabulary (tested exact, then lowercased).
+func (g *Generator) Contains(word string) bool {
+	if g == nil || g.vocab == nil {
+		return false
+	}
+	if _, ok := g.vocab.Lookup(word); ok {
+		return true
+	}
+	if lw := strings.ToLower(word); lw != word {
+		if _, ok := g.vocab.Lookup(lw); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// SetRNG sets the random source for deterministic generation on the generator
+// and any reverse engine. Not safe for concurrent use.
+func (g *Generator) SetRNG(r *rand.Rand) {
+	if s, ok := g.chain.(barkov.RNGSettable); ok {
+		s.SetRNG(r)
+	}
+	if g.reverseChain != nil {
+		if s, ok := g.reverseChain.(barkov.RNGSettable); ok {
+			s.SetRNG(r)
+		}
+	}
+}
 
 // MessageSet returns the whole-message digest set built from the corpus,
 // or nil if AntiVerbatim(0) was set.

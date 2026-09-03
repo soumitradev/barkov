@@ -5,6 +5,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -416,6 +417,52 @@ func TestBidirectionalSeedMiddle(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("expected 'fox' in middle-seeded output, got %v", out)
+		}
+	}
+}
+
+func TestGeneratorContains(t *testing.T) {
+	g, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !g.Contains("the") {
+		t.Error("expected Contains('the') to be true")
+	}
+	if !g.Contains("THE") {
+		t.Error("expected Contains('THE') to be true (lowercase fallback)")
+	}
+	if g.Contains("nonexistenttoken123") {
+		t.Error("expected Contains('nonexistenttoken123') to be false")
+	}
+}
+
+func TestGeneratorSetRNG(t *testing.T) {
+	g1, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g1.SetRNG(rand.New(rand.NewPCG(123, 456)))
+	g2.SetRNG(rand.New(rand.NewPCG(123, 456)))
+
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		out1, err := g1.Generate(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out2, err := g2.Generate(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(out1, out2) {
+			t.Fatalf("outputs diverged after SetRNG at step %d: %v vs %v", i, out1, out2)
 		}
 	}
 }
