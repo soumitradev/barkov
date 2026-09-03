@@ -3,6 +3,7 @@ package interned
 import (
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -172,13 +173,12 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 
 	// Walk each state's linked list; dedupe follows into cc.Choices/CumDist.
 	// Small groups (<=16) dedupe via linear scan (beats map hashing and
-	// allocates nothing); large groups use a reusable counting map whose
-	// bucket storage is cleared and reused across states, amortising cost
-	// at O(group_size) without the O(group²) blowup that linear scan would
-	// suffer on pathological fan-out states like begin. The finished
-	// ChoicesIndex is written back into the table slot in place.
+	// allocates nothing); large groups collect into a reusable sort buffer
+	// and sort with slices.Sort (pdqsort), avoiding map allocation, hashing,
+	// and mapclear overhead. The finished ChoicesIndex is written back into
+	// the table slot in place.
 	const linearThreshold = 16
-	var countBuf map[TokenID]uint32
+	var sortBuf []TokenID
 	stateIdx.forEach(func(_ K, val *barkov.ChoicesIndex) {
 		s := val.Offset - 1
 		offset := uint32(len(cc.Choices))
@@ -206,16 +206,31 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 				}
 			}
 		} else {
-			if countBuf == nil {
-				countBuf = make(map[TokenID]uint32, groupSize)
-			} else {
-				clear(countBuf)
-			}
+			sortBuf = sortBuf[:0]
 			for i := head[s]; i != -1; i = next[i] {
-				countBuf[pendingTok[i]]++
+				sortBuf = append(sortBuf, pendingTok[i])
 			}
-			for tok, cnt := range countBuf {
-				cc.Choices = append(cc.Choices, tok)
+			slices.Sort(sortBuf)
+
+			var prev TokenID
+			var cnt uint32
+			for idx, tok := range sortBuf {
+				if idx == 0 {
+					prev = tok
+					cnt = 1
+					continue
+				}
+				if tok == prev {
+					cnt++
+				} else {
+					cc.Choices = append(cc.Choices, prev)
+					cc.CumDist = append(cc.CumDist, cnt)
+					prev = tok
+					cnt = 1
+				}
+			}
+			if len(sortBuf) > 0 {
+				cc.Choices = append(cc.Choices, prev)
 				cc.CumDist = append(cc.CumDist, cnt)
 			}
 		}
