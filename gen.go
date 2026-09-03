@@ -126,6 +126,9 @@ func Gen[T comparable](
 			}
 			out = append(out, tok)
 		}
+		if len(out) == 0 {
+			return nil, nil
+		}
 		return out, nil
 	}
 
@@ -138,6 +141,9 @@ func Gen[T comparable](
 	}
 	if cfg.outputValidator != nil && !cfg.outputValidator(out) {
 		return nil, fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation)
+	}
+	if len(out) == 0 {
+		return nil, nil
 	}
 	return out, nil
 }
