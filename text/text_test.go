@@ -283,3 +283,139 @@ func TestNewErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestMaxTokens(t *testing.T) {
+	ctx := context.Background()
+	// Construction-time cap: all generated outputs must be <= 5 tokens
+	g, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0), text.MaxTokens(5), text.Retries(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 20; i++ {
+		out, err := g.Generate(ctx)
+		if err != nil {
+			t.Fatalf("Generate with MaxTokens(5): %v", err)
+		}
+		if len(out) > 5 {
+			t.Fatalf("expected output length <= 5, got %d: %v", len(out), out)
+		}
+	}
+
+	// Per-call override: limit to 4 tokens
+	for i := 0; i < 10; i++ {
+		out, err := g.Generate(ctx, text.WithMaxTokens(4))
+		if err != nil {
+			t.Fatalf("Generate with WithMaxTokens(4): %v", err)
+		}
+		if len(out) > 4 {
+			t.Fatalf("expected output length <= 4, got %d: %v", len(out), out)
+		}
+	}
+}
+
+func TestSeedLowercaseFallback(t *testing.T) {
+	g, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Uppercase seed should resolve to lowercase corpus word "quick"
+	out, err := g.Generate(ctx, text.Seed([]string{"QUICK"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) == 0 || out[0] != "quick" {
+		t.Errorf("expected 'QUICK' to resolve to 'quick' at start of output, got %v", out)
+	}
+}
+
+func TestStatesIteration(t *testing.T) {
+	g, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	order1Count := 0
+	for words, count := range g.States(1) {
+		if len(words) != 1 {
+			t.Fatalf("expected 1 word for order 1, got %d: %v", len(words), words)
+		}
+		if count == 0 {
+			t.Errorf("expected non-zero count for state %v", words)
+		}
+		order1Count++
+	}
+	if order1Count == 0 {
+		t.Error("expected >0 states at order 1")
+	}
+
+	order2Count := 0
+	for words, count := range g.States(2) {
+		if len(words) != 2 {
+			t.Fatalf("expected 2 words for order 2, got %d: %v", len(words), words)
+		}
+		if count == 0 {
+			t.Errorf("expected non-zero count for state %v", words)
+		}
+		order2Count++
+	}
+	if order2Count == 0 {
+		t.Error("expected >0 states at order 2")
+	}
+}
+
+func TestMessageSet(t *testing.T) {
+	g, err := text.New(smallCorpus, text.Order(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms := g.MessageSet()
+	if ms == nil {
+		t.Fatal("expected MessageSet to be non-nil when AntiVerbatim is active")
+	}
+	if ms.Size() != len(smallCorpus) {
+		t.Errorf("expected MessageSet size %d, got %d", len(smallCorpus), ms.Size())
+	}
+}
+
+func TestBidirectionalSeedMiddle(t *testing.T) {
+	ctx := context.Background()
+
+	// Generator without Bidirectional() should reject SeedMiddle
+	unibi, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unibi.Generate(ctx, text.SeedMiddle([]string{"fox"})); err == nil {
+		t.Error("expected error when calling SeedMiddle without Bidirectional()")
+	}
+
+	// Generator with Bidirectional()
+	bidi, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0), text.Bidirectional())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bidi.ReverseChain() == nil {
+		t.Fatal("expected ReverseChain to be non-nil under Bidirectional()")
+	}
+
+	// SeedMiddle should produce an output containing the seed
+	for i := 0; i < 20; i++ {
+		out, err := bidi.Generate(ctx, text.SeedMiddle([]string{"fox"}))
+		if err != nil {
+			t.Fatalf("SeedMiddle: %v", err)
+		}
+		found := false
+		for _, w := range out {
+			if w == "fox" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected 'fox' in middle-seeded output, got %v", out)
+		}
+	}
+}

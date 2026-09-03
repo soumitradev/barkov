@@ -18,12 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
 	barkov "github.com/soumitradev/barkov/v2"
-	"github.com/soumitradev/barkov/v2/hashers/fnv"
 	"github.com/soumitradev/barkov/v2/interned"
 )
 
@@ -33,22 +34,26 @@ import (
 const avDefault = -1
 
 type config struct {
-	order        int
-	timeout      time.Duration
-	retries      int
-	threads      int
-	antiVerbatim int
-	rng          *rand.Rand
+	order         int
+	timeout       time.Duration
+	retries       int
+	threads       int
+	antiVerbatim  int
+	maxTokens     int
+	bidirectional bool
+	rng           *rand.Rand
 }
 
 func defaultConfig() config {
 	return config{
-		order:        4,
-		timeout:      10 * time.Second,
-		retries:      64,
-		threads:      0,
-		antiVerbatim: avDefault,
-		rng:          nil,
+		order:         4,
+		timeout:       10 * time.Second,
+		retries:       64,
+		threads:       0,
+		antiVerbatim:  avDefault,
+		maxTokens:     0,
+		bidirectional: false,
+		rng:           nil,
 	}
 }
 
@@ -88,6 +93,15 @@ func Threads(n int) Option { return func(c *config) { c.threads = n } }
 // check and the whole-message check).
 func AntiVerbatim(n int) Option { return func(c *config) { c.antiVerbatim = n } }
 
+// MaxTokens sets a default maximum token length for generated outputs.
+// Attempts exceeding this limit are rejected and retried up to Retries.
+// 0 means no maximum length limit.
+func MaxTokens(n int) Option { return func(c *config) { c.maxTokens = n } }
+
+// Bidirectional builds both a forward and a reverse engine, enabling
+// middle-out seeded generation via SeedMiddle.
+func Bidirectional() Option { return func(c *config) { c.bidirectional = true } }
+
 // RNG fixes the random source for deterministic output. A Generator with a
 // fixed RNG is no longer safe for concurrent Generate calls, and should not
 // be combined with Threads.
@@ -96,18 +110,18 @@ func RNG(r *rand.Rand) Option { return func(c *config) { c.rng = r } }
 // Generator is a ready-to-use, string-first text generator. Unless RNG was
 // set, its Generate/Sentence methods are safe to call concurrently.
 type Generator struct {
-	chain   barkov.GenerativeChain[interned.TokenID]
-	vocab   *interned.Vocabulary
-	timeout time.Duration
-	retries int
-	threads int
+	chain        barkov.GenerativeChain[interned.TokenID]
+	reverseChain barkov.GenerativeChain[interned.TokenID]
+	vocab        *interned.Vocabulary
+	timeout      time.Duration
+	retries      int
+	threads      int
+	maxTokens    int
 
 	// messages holds fnv digests of every complete corpus message, so a
 	// short output that reproduces a whole message is caught even when it
 	// is too short for any n-gram window. nil when anti-verbatim is disabled.
-	// (The sliding n-gram check itself is steered away inside the engine's
-	// walk; see interned.BuildBackoff.)
-	messages map[uint64]struct{}
+	messages *interned.MessageSet
 }
 
 // New builds a Generator from a pre-tokenized corpus (each inner slice is
@@ -134,13 +148,13 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	if cfg.antiVerbatim < 0 && cfg.antiVerbatim != avDefault {
 		return nil, fmt.Errorf("text: AntiVerbatim(%d) must be >= 0", cfg.antiVerbatim)
 	}
+	if cfg.maxTokens < 0 {
+		return nil, fmt.Errorf("text: MaxTokens(%d) must be >= 0", cfg.maxTokens)
+	}
 	if !hasContent(corpus) {
 		return nil, errors.New("text: corpus has no usable messages")
 	}
 
-	// The engine's context stack reaches to Order+2 (capped at the
-	// engine's max of 8) so the steering window can cover the same
-	// Order+2 n-grams the anti-verbatim contract has always promised.
 	maxOrder := min(cfg.order+2, 8)
 	maxVerbatim := -1 // AntiVerbatim(0): steering off
 	if cfg.antiVerbatim != 0 {
@@ -148,8 +162,6 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 		if window == avDefault {
 			window = cfg.order + 2
 		}
-		// Steering at a window narrower than requested is strictly
-		// stronger: no verbatim R-gram implies no verbatim (R+k)-gram.
 		maxVerbatim = max(2, min(window, maxOrder))
 	}
 
@@ -168,15 +180,36 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	}
 
 	g := &Generator{
-		chain:   chain,
-		vocab:   vocab,
-		timeout: cfg.timeout,
-		retries: cfg.retries,
-		threads: cfg.threads,
+		chain:     chain,
+		vocab:     vocab,
+		timeout:   cfg.timeout,
+		retries:   cfg.retries,
+		threads:   cfg.threads,
+		maxTokens: cfg.maxTokens,
 	}
 
 	if cfg.antiVerbatim != 0 {
-		g.messages = buildMessageSet(encoded)
+		g.messages = interned.NewMessageSet(encoded)
+	}
+
+	if cfg.bidirectional {
+		reversedEncoded := make([][]interned.TokenID, len(encoded))
+		for i, msg := range encoded {
+			rev := make([]interned.TokenID, len(msg))
+			copy(rev, msg)
+			slices.Reverse(rev)
+			reversedEncoded[i] = rev
+		}
+		revChain := interned.BuildBackoff(interned.BackoffConfig{
+			MaxOrder:    maxOrder,
+			MaxVerbatim: maxVerbatim,
+		}, reversedEncoded)
+		if cfg.rng != nil {
+			if s, ok := revChain.(barkov.RNGSettable); ok {
+				s.SetRNG(cfg.rng)
+			}
+		}
+		g.reverseChain = revChain
 	}
 
 	return g, nil
@@ -191,61 +224,90 @@ func hasContent(corpus [][]string) bool {
 	return false
 }
 
-// buildMessageSet digests every complete corpus message so exact
-// reproductions can be rejected regardless of length.
-func buildMessageSet(encoded [][]interned.TokenID) map[uint64]struct{} {
-	set := make(map[uint64]struct{}, len(encoded))
-	enc := interned.PackedEncoder{}
-	var buf []byte
-	for _, msg := range encoded {
-		buf = enc.AppendEncoded(buf[:0], msg)
-		set[fnv.FNV{}.Hash(buf)] = struct{}{}
-	}
-	return set
-}
-
 // GenOption configures a single Generate call.
 type GenOption func(*genConfig)
 
 type genConfig struct {
-	seed []string
+	seed       []string
+	seedMiddle []string
+	maxTokens  int
+	timeout    time.Duration
+	retries    int
+	threads    int
 }
 
 // Seed biases generation to start from the given words. Words not in the
-// corpus vocabulary are ignored; if none remain, generation is unseeded.
-// The surviving seed words are part of the returned output.
+// corpus vocabulary (tested exact, then lowercased) are ignored; if none
+// remain, generation is unseeded. The surviving seed words lead the output.
 func Seed(words []string) GenOption {
 	return func(gc *genConfig) { gc.seed = words }
 }
 
+// SeedMiddle generates a sentence around the given words (middle-out).
+// Requires the Generator to have been constructed with Bidirectional().
+// If no seed words survive vocabulary lookup, generation falls back to unseeded.
+func SeedMiddle(words []string) GenOption {
+	return func(gc *genConfig) { gc.seedMiddle = words }
+}
+
+// WithMaxTokens overrides the maximum token length for this generation call.
+func WithMaxTokens(n int) GenOption {
+	return func(gc *genConfig) { gc.maxTokens = n }
+}
+
+// WithTimeout overrides the per-Generate timeout for this call.
+func WithTimeout(d time.Duration) GenOption {
+	return func(gc *genConfig) { gc.timeout = d }
+}
+
+// WithRetries overrides the retry budget for this call.
+func WithRetries(n int) GenOption {
+	return func(gc *genConfig) { gc.retries = n }
+}
+
+// WithThreads overrides the parallelism width for this call.
+func WithThreads(n int) GenOption {
+	return func(gc *genConfig) { gc.threads = n }
+}
+
 // Generate returns one generated message as tokens. Seed words that survive
-// vocabulary lookup lead the output. It retries on anti-verbatim rejection
-// up to the configured Retries, and returns context and barkov errors
-// unchanged.
+// vocabulary lookup lead the output (or sit mid-sentence under SeedMiddle).
+// It retries on anti-verbatim or length rejection up to the configured Retries,
+// and returns context and barkov errors unchanged.
 func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, error) {
-	var gc genConfig
+	gc := genConfig{
+		maxTokens: g.maxTokens,
+		timeout:   g.timeout,
+		retries:   g.retries,
+		threads:   g.threads,
+	}
 	for _, opt := range opts {
 		opt(&gc)
 	}
 
-	seed := g.internSeed(gc.seed)
-
-	if g.timeout > 0 {
+	if gc.timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, g.timeout)
+		ctx, cancel = context.WithTimeout(ctx, gc.timeout)
 		defer cancel()
 	}
 
-	genOpts := g.genOptions(seed)
+	if gc.seedMiddle != nil {
+		return g.generateMiddleOut(ctx, &gc)
+	}
+
+	seed := g.internSeed(gc.seed)
+	return g.generateForward(ctx, &gc, seed)
+}
+
+func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []interned.TokenID) ([]string, error) {
+	genOpts := g.genOptions(seed, gc.maxTokens, gc.threads)
 
 	var lastErr error
-	for attempt := 0; attempt < g.retries; attempt++ {
+	for attempt := 0; attempt < gc.retries; attempt++ {
 		out, err := barkov.Gen(ctx, g.chain, genOpts...)
 		if err == nil {
 			return g.vocab.DecodeTokens(out), nil
 		}
-		// Only anti-verbatim rejection is retryable. Context errors and
-		// any other barkov error propagate unchanged.
 		if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
 			return nil, err
 		}
@@ -253,6 +315,67 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+	}
+	return nil, lastErr
+}
+
+func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]string, error) {
+	if g.reverseChain == nil {
+		return nil, errors.New("text: SeedMiddle requires Bidirectional() option at New")
+	}
+	seed := g.internSeed(gc.seedMiddle)
+	if len(seed) == 0 {
+		return g.generateForward(ctx, gc, nil)
+	}
+
+	revSeed := make([]interned.TokenID, len(seed))
+	copy(revSeed, seed)
+	slices.Reverse(revSeed)
+
+	fwdOpts := g.genOptions(seed, 0, gc.threads)
+	bwdOpts := g.genOptions(revSeed, 0, gc.threads)
+
+	var lastErr error
+	for attempt := 0; attempt < gc.retries; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		fwd, err := barkov.Gen(ctx, g.chain, fwdOpts...)
+		if err != nil {
+			if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+		bwd, err := barkov.Gen(ctx, g.reverseChain, bwdOpts...)
+		if err != nil {
+			if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+
+		slices.Reverse(bwd)
+		prefixLen := len(bwd) - len(seed)
+		if prefixLen < 0 {
+			prefixLen = 0
+		}
+		spliced := make([]interned.TokenID, 0, prefixLen+len(fwd))
+		spliced = append(spliced, bwd[:prefixLen]...)
+		spliced = append(spliced, fwd...)
+
+		if gc.maxTokens > 0 && len(spliced) > gc.maxTokens {
+			lastErr = fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", gc.maxTokens, barkov.ErrSentenceFailedValidation)
+			continue
+		}
+		if g.messages != nil && g.messages.Contains(spliced) {
+			lastErr = fmt.Errorf("barkov: output failed validation: %w", barkov.ErrSentenceFailedValidation)
+			continue
+		}
+
+		return g.vocab.DecodeTokens(spliced), nil
 	}
 	return nil, lastErr
 }
@@ -266,8 +389,8 @@ func (g *Generator) Sentence(ctx context.Context, opts ...GenOption) (string, er
 	return strings.Join(out, " "), nil
 }
 
-// internSeed maps seed words to TokenIDs, dropping any not in the
-// vocabulary. Returns nil (unseeded) when nothing survives.
+// internSeed maps seed words to TokenIDs, dropping any not in the vocabulary
+// after falling back to lowercase. Returns nil (unseeded) when nothing survives.
 func (g *Generator) internSeed(words []string) []interned.TokenID {
 	if len(words) == 0 {
 		return nil
@@ -276,6 +399,12 @@ func (g *Generator) internSeed(words []string) []interned.TokenID {
 	for _, w := range words {
 		if id, ok := g.vocab.Lookup(w); ok {
 			seed = append(seed, id)
+			continue
+		}
+		if lw := strings.ToLower(w); lw != w {
+			if id, ok := g.vocab.Lookup(lw); ok {
+				seed = append(seed, id)
+			}
 		}
 	}
 	if len(seed) == 0 {
@@ -284,31 +413,22 @@ func (g *Generator) internSeed(words []string) []interned.TokenID {
 	return seed
 }
 
-// genOptions assembles the core generation options for one attempt. The
-// sliding anti-verbatim check needs no option here: the backoff engine
-// steers around verbatim continuations inside the walk itself.
-func (g *Generator) genOptions(seed []interned.TokenID) []barkov.GenOption[interned.TokenID] {
-	opts := make([]barkov.GenOption[interned.TokenID], 0, 3)
+// genOptions assembles the core generation options for one attempt.
+func (g *Generator) genOptions(seed []interned.TokenID, maxTokens, threads int) []barkov.GenOption[interned.TokenID] {
+	opts := make([]barkov.GenOption[interned.TokenID], 0, 4)
 	if len(seed) > 0 {
 		opts = append(opts, barkov.WithSeed(seed))
 	}
-	if g.messages != nil {
-		opts = append(opts, barkov.WithOutputValidator(g.notWholeMessage))
+	if maxTokens > 0 {
+		opts = append(opts, barkov.WithMaxTokens[interned.TokenID](maxTokens))
 	}
-	if g.threads > 0 {
-		opts = append(opts, barkov.WithParallelism[interned.TokenID](g.threads))
+	if g.messages != nil {
+		opts = append(opts, barkov.WithOutputValidator(g.messages.NotWholeMessage()))
+	}
+	if threads > 0 {
+		opts = append(opts, barkov.WithParallelism[interned.TokenID](threads))
 	}
 	return opts
-}
-
-// notWholeMessage reports whether out is NOT an exact reproduction of a
-// complete corpus message. Safe for concurrent use: it reads the
-// read-only digest set and allocates only stack/local state.
-func (g *Generator) notWholeMessage(out []interned.TokenID) bool {
-	var buf [256]byte
-	b := interned.PackedEncoder{}.AppendEncoded(buf[:0], out)
-	_, found := g.messages[fnv.FNV{}.Hash(b)]
-	return !found
 }
 
 // Chain returns the underlying engine for callers who need the full core
@@ -316,6 +436,33 @@ func (g *Generator) notWholeMessage(out []interned.TokenID) bool {
 // speaks are interned.TokenID; use Vocab to translate.
 func (g *Generator) Chain() barkov.GenerativeChain[interned.TokenID] { return g.chain }
 
+// ReverseChain returns the reverse engine when constructed with Bidirectional(),
+// or nil otherwise.
+func (g *Generator) ReverseChain() barkov.GenerativeChain[interned.TokenID] { return g.reverseChain }
+
 // Vocab returns the vocabulary that maps between strings and the TokenIDs
 // the Chain uses.
 func (g *Generator) Vocab() *interned.Vocabulary { return g.vocab }
+
+// MessageSet returns the whole-message digest set built from the corpus,
+// or nil if AntiVerbatim(0) was set.
+func (g *Generator) MessageSet() *interned.MessageSet { return g.messages }
+
+// States iterates all states at the given order (1..MaxOrder) as decoded
+// string token slices with their observation counts.
+func (g *Generator) States(order int) iter.Seq2[[]string, uint32] {
+	bc, ok := g.chain.(interface {
+		States(int) iter.Seq2[[]interned.TokenID, uint32]
+	})
+	if !ok {
+		return func(yield func([]string, uint32) bool) {}
+	}
+	return func(yield func([]string, uint32) bool) {
+		for tokens, count := range bc.States(order) {
+			words := g.vocab.DecodeTokens(tokens)
+			if !yield(words, count) {
+				return
+			}
+		}
+	}
+}
