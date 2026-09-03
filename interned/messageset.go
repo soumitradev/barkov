@@ -8,8 +8,9 @@ import (
 // O(1) checks for exact-match reproduction of any corpus message regardless
 // of length. Safe for concurrent lookups after construction.
 type MessageSet struct {
-	digests map[uint64]struct{}
-	encoder PackedEncoder
+	digests   map[uint64]struct{}
+	encoder   PackedEncoder
+	validator func([]TokenID) bool
 }
 
 // NewMessageSet builds a MessageSet from pre-interned corpus messages.
@@ -21,10 +22,14 @@ func NewMessageSet(encoded [][]TokenID) *MessageSet {
 		buf = enc.AppendEncoded(buf[:0], msg)
 		set[fnv.FNV{}.Hash(buf)] = struct{}{}
 	}
-	return &MessageSet{
+	ms := &MessageSet{
 		digests: set,
 		encoder: enc,
 	}
+	ms.validator = func(out []TokenID) bool {
+		return !ms.Contains(out)
+	}
+	return ms
 }
 
 // Contains reports whether tokens matches a complete corpus message in the set.
@@ -41,9 +46,10 @@ func (ms *MessageSet) Contains(tokens []TokenID) bool {
 // NotWholeMessage returns a validator function suitable for barkov.WithOutputValidator.
 // It returns false (rejects) if the output is an exact match for a whole message in the set.
 func (ms *MessageSet) NotWholeMessage() func([]TokenID) bool {
-	return func(out []TokenID) bool {
-		return !ms.Contains(out)
+	if ms == nil {
+		return func([]TokenID) bool { return true }
 	}
+	return ms.validator
 }
 
 // Size returns the number of unique message digests in the set.
