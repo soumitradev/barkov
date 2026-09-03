@@ -235,10 +235,7 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 			}
 		}
 
-		if fanout := len(cc.Choices) - groupStart; fanout > 65535 {
-			panic(fmt.Sprintf("interned: state fanout %d exceeds ChoicesIndex.Count capacity 65535", fanout))
-		}
-		count := uint16(len(cc.Choices) - groupStart)
+		count := uint32(len(cc.Choices) - groupStart)
 		var indexOffset uint32
 		if count == 1 {
 			// Fanout-1: pack the follower TokenID into Offset so pickFollow
@@ -257,7 +254,7 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		*val = barkov.ChoicesIndex{
 			Offset: indexOffset,
 			Count:  count,
-			Obs:    uint16(min(groupSize, 65535)),
+			Obs:    uint32(groupSize),
 		}
 	})
 	cc.Model = stateIdx

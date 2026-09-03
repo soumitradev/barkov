@@ -5,11 +5,10 @@ import (
 	"unsafe"
 )
 
-// TestChoicesIndexSizeof pins the SoA entry size: Obs occupies what was
-// trailing padding, so the struct must stay 8 bytes.
+// TestChoicesIndexSizeof pins the SoA entry size: Offset uint32, Count uint32, Obs uint32 = 12 bytes.
 func TestChoicesIndexSizeof(t *testing.T) {
-	if got := unsafe.Sizeof(ChoicesIndex{}); got != 8 {
-		t.Errorf("unsafe.Sizeof(ChoicesIndex{}) = %d, want 8", got)
+	if got := unsafe.Sizeof(ChoicesIndex{}); got != 12 {
+		t.Errorf("unsafe.Sizeof(ChoicesIndex{}) = %d, want 12", got)
 	}
 }
 
@@ -48,10 +47,9 @@ func TestChoicesIndexObsKnownCounts(t *testing.T) {
 	})
 }
 
-// TestChoicesIndexObsSaturation verifies Obs saturates at 65535 rather than
-// wrapping, using 70,000 observations of a single state. Rows share one
-// backing slice to keep allocation low; neither builder mutates its input.
-func TestChoicesIndexObsSaturation(t *testing.T) {
+// TestChoicesIndexObsLargeCounts verifies Obs handles counts >65535 without
+// wrapping or truncation, using 70,000 observations of a single state.
+func TestChoicesIndexObsLargeCounts(t *testing.T) {
 	const n = 70000
 	row := []string{"a", "b"}
 	corpus := make([][]string, n)
@@ -67,7 +65,7 @@ func TestChoicesIndexObsSaturation(t *testing.T) {
 	if !ok {
 		t.Fatalf("begin state missing from model")
 	}
-	if idx.Obs != 65535 {
-		t.Errorf("Obs = %d, want 65535 (saturated)", idx.Obs)
+	if idx.Obs != 70000 {
+		t.Errorf("Obs = %d, want 70000", idx.Obs)
 	}
 }
