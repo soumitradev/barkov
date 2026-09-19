@@ -86,6 +86,48 @@ The construction options and their defaults:
 
 Without an RNG override, generators support concurrent `Generate` and `Sentence` calls. A fixed RNG must not be shared between concurrent calls, and `Threads` greater than one is rejected with it. Middle-out generation uses that RNG sequentially too. `gen.SetRNG(r)` replaces the source; `gen.SetRNG(nil)` restores the default. Change the RNG only when generation is idle.
 
+## Saving and loading
+
+Save a trained `text.Generator` with `gen.Save(io.Writer)` and restore it with `text.Load(io.Reader)`. Loading restores the trained tables and seed indexes directly; it does not need the corpus or retrain the model.
+
+```go
+f, err := os.OpenFile("model.barkov", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+if err != nil {
+    return err
+}
+if err := gen.Save(f); err != nil {
+    f.Close()
+    return err
+}
+if err := f.Close(); err != nil {
+    return err
+}
+
+f, err = os.Open("model.barkov")
+if err != nil {
+    return err
+}
+defer f.Close()
+restored, err := text.Load(f)
+if err != nil {
+    return err
+}
+```
+
+Snapshots preserve the vocabulary, forward and reverse chains, observation weights, copy checks and generation defaults. RNG state is excluded: a restored generator uses the concurrency-safe default RNG. Call `restored.SetRNG(...)` if you need reproducible generation. Saving can run alongside generation, provided the model and vocabulary are not mutated.
+
+The format is versioned and checksummed. Load rejects unknown versions, damaged files, invalid table data and trailing bytes. Files must be loaded on a machine with the same native byte order because whole-message digests depend on it. Keep the corpus as the source for rebuilding incompatible snapshots. Files and sized readers support direct table restoration; other streams grow their tables incrementally.
+
+The caller owns file lifetimes and replacement policy. For an existing snapshot, write to a temporary file in the same directory, sync and close it, then rename it and sync the directory. This prevents an interrupted save from damaging the previous file. Snapshots represent the saved build and do not automatically include later corpus changes.
+
+For an interned backoff model outside `text`, `interned.ModelSnapshot` groups `Vocabulary`, `Forward`, optional `Reverse` and `Messages`; its `WriteTo` method pairs with `interned.ReadModelSnapshot`. Both directions must share the vocabulary and backoff configuration.
+
+Benchmark training, disk saving (including sync) and warm-file loading on the bundled public corpus with:
+
+```sh
+go test ./text -run '^$' -bench '^BenchmarkModelSnapshot$' -benchmem
+```
+
 ## Why
 
 Markovify was slow, and it didn't give me control over tokenization or validation without overriding its classes. Plus I feel like the memory layout was very bloated and I didn't want to use Python either. So this library stays barebones about both: tokenize your text however you want, validate a sentence however you see fit. If you don't want the chain struct either, fine, there's a `GenerativeChain` interface to satisfy.
