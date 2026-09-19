@@ -40,6 +40,7 @@ type GenOption[T comparable] func(*genConfig[T])
 
 type genConfig[T comparable] struct {
 	seed            []T
+	initialState    []T
 	validator       func([]T) bool
 	validatorWidth  int // 0 = default; WithNGramValidator requires a positive width
 	parallelism     int // 0 = single-threaded; >0 = goroutine count
@@ -54,6 +55,14 @@ type genConfig[T comparable] struct {
 // than chain.StateSize().
 func WithSeed[T comparable](seed []T) GenOption[T] {
 	return func(c *genConfig[T]) { c.seed = seed }
+}
+
+// WithInitialState supplies the state used for the first transition, separately
+// from the emitted WithSeed tokens. The last StateSize tokens are used, padded
+// with Begin when shorter. A nil state keeps the normal seed-derived state.
+// Initial-state tokens are not emitted or counted against WithMaxTokens.
+func WithInitialState[T comparable](tokens []T) GenOption[T] {
+	return func(c *genConfig[T]) { c.initialState = tokens }
 }
 
 // WithValidator installs an n-gram validator. The function is called

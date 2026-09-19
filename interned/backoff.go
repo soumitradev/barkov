@@ -37,6 +37,10 @@ type BackoffChain interface {
 	// States iterates all states at order (1..MaxOrder) with their total
 	// transition observation counts.
 	States(order int) iter.Seq2[[]TokenID, uint32]
+	// SeedContext samples observed history for a short interior seed.
+	SeedContext(seed []TokenID) ([]TokenID, error)
+	// WithoutVerbatim returns a view sharing the same immutable model tables.
+	WithoutVerbatim() BackoffChain
 }
 
 // withDefaults validates cfg and fills zero values with defaults. Panics
@@ -126,6 +130,7 @@ type backoffCore struct {
 	sentinels barkov.Sentinels[TokenID]
 	encoder   PackedEncoder
 	rng       *rand.Rand
+	contexts  *contextIndex
 }
 
 // SetRNG overrides the random source used by the walk. Intended for
@@ -435,8 +440,13 @@ func buildBackoffCore(cfg BackoffConfig, corpus [][]TokenID) *backoffCore {
 		}()
 	}
 	wg.Wait()
+	var contexts *contextIndex
+	if cfg.MinOrder > 1 {
+		contexts = newContextIndex(tables[cfg.MinOrder-1], cfg.MinOrder, cfg.MinSupport)
+	}
 	return &backoffCore{
 		tables:    tables,
+		contexts:  contexts,
 		cfg:       cfg,
 		sentinels: DefaultSentinels(),
 		encoder:   PackedEncoder{},
@@ -487,8 +497,11 @@ func buildOrderTable(order int, corpus [][]TokenID) orderTable {
 //	chain.(barkov.RNGSettable).SetRNG(r)
 func BuildBackoff(cfg BackoffConfig, corpus [][]TokenID) barkov.GenerativeChain[TokenID] {
 	cfg = cfg.withDefaults()
-	core := buildBackoffCore(cfg, corpus)
-	switch cfg.MaxOrder {
+	return wrapBackoff(buildBackoffCore(cfg, corpus))
+}
+
+func wrapBackoff(core *backoffCore) BackoffChain {
+	switch core.cfg.MaxOrder {
 	case 2:
 		return &backoffChain2{core}
 	case 3:

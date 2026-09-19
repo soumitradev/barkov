@@ -61,7 +61,11 @@ out, err := gen.Generate(ctx,
 )
 ```
 
-Seed lookup tries each word exactly, then lowercased. Unknown words are dropped; if none remain, generation is unseeded. `SeedMiddle` requires `Bidirectional()` at construction. It tries both directions and requires at least one new word after the seed. If only the backward half succeeds, or the forward half ends at the seed, it discards that candidate and spends the remaining attempts generating forward-only from the same seed. A successful forward half can still be used if the backward half fails validation. The fallback keeps the original retry/time budgets, length limits and copy protection; exhausted attempts return an error, never backward-only text or a seed-only echo.
+Seed lookup tries each word exactly, then lowercased. Unknown words are dropped; if none remain, generation is unseeded. `Seed` treats the input as a sentence start. `SeedMiddle` requires `Bidirectional()` and uses observed corpus context for seeds shorter than `MinOrder`, weighted by observations and filtered by `MinSupport`. This supplies missing history without lowering the context floor. Other missing history stays unknown, rather than being treated as a sentence boundary.
+
+`SeedMiddle` requires at least one new word after the seed. It validates the completed output, rather than its temporary or reversed halves. If the reverse half cannot be used, or the combined output fails validation, it can return a valid forward half. Backward-only candidates use the remaining attempts for forward-only generation. Exhaustion returns an error, never backward-only text or a seed-only echo.
+
+Pass `text.WithVerbatimFallback()` to retry exhausted validation failures with copy prevention disabled. This second phase gets the same retry limit and shares the original timeout; all other constraints still apply. For a long seed that keeps ending immediately, this phase can restart from its shortest permitted context while still emitting the entire seed. It shares model tables without changing the generator or concurrent calls. Without this option, copy prevention stays strict.
 
 The construction options and their defaults:
 
@@ -78,7 +82,7 @@ The construction options and their defaults:
 | `Bidirectional()` | Off | Build a reverse chain for middle-out generation |
 | `RNG(r)` | Package RNG | Supply a `*rand.Rand` from `math/rand/v2` for reproducible sequential generation |
 
-`WithMaxTokens`, `WithTimeout`, `WithRetries`, and `WithThreads` override those defaults for one call. Negative lengths, timeouts, or worker counts return errors, as do zero or negative retry budgets. Length limits reject an attempt; they don't truncate the result. Parallelism multiplies attempts, so `Retries(32)` with `Threads(2)` can start up to 64 forward walks, or up to twice that with both directions.
+`WithMaxTokens`, `WithTimeout`, `WithRetries`, and `WithThreads` override those defaults for one call. `WithVerbatimFallback` adds the bounded fallback phase described above. Negative lengths, timeouts, or worker counts return errors, as do zero or negative retry budgets. Length limits reject an attempt; they don't truncate the result. Parallelism multiplies attempts, so `Retries(32)` with `Threads(2)` can start up to 64 forward walks, or up to twice that with both directions.
 
 Without an RNG override, generators support concurrent `Generate` and `Sentence` calls. A fixed RNG must not be shared between concurrent calls, and `Threads` greater than one is rejected with it. Middle-out generation uses that RNG sequentially too. `gen.SetRNG(r)` replaces the source; `gen.SetRNG(nil)` restores the default. Change the RNG only when generation is idle.
 
@@ -158,6 +162,8 @@ for token, err := range barkov.GenIter(ctx, chain) {
 ```
 
 Core generation makes one attempt by default. `WithSeed`, `WithMaxTokens`, and the validator options work with both calls. There is no built-in core timeout; pass a context with a deadline. Cancellation is checked between tokens, including seeds and buffered results.
+
+`barkov.WithInitialState` separates the first lookup state from the emitted `WithSeed` tokens; initialization history is not included in the output or its token limit.
 
 `Gen` discards partial output on failure. `GenIter` can already have yielded a prefix when a later step fails, so keep that in mind when writing directly to an output stream. Whole-output validation and parallel generation buffer the candidate before yielding it.
 

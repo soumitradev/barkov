@@ -3,10 +3,7 @@ package text
 import (
 	"context"
 	"errors"
-	"fmt"
-	"slices"
 	"strings"
-	"sync"
 
 	barkov "github.com/soumitradev/barkov/v2"
 	"github.com/soumitradev/barkov/v2/interned"
@@ -32,12 +29,27 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 		defer cancel()
 	}
 
-	if gc.seedMiddle != nil {
-		return g.generateMiddleOut(ctx, &gc)
+	out, err := g.generate(ctx, &gc)
+	if err == nil || !gc.verbatimFallback || g.messages == nil || !errors.Is(err, barkov.ErrSentenceFailedValidation) {
+		return out, err
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	fallback := *g
+	fallback.chain = g.chain.WithoutVerbatim()
+	if g.reverseChain != nil {
+		fallback.reverseChain = g.reverseChain.WithoutVerbatim()
+	}
+	fallback.messages = nil
+	return fallback.generate(ctx, &gc)
+}
 
-	seed := g.internSeed(gc.seed)
-	return g.generateForward(ctx, &gc, seed)
+func (g *Generator) generate(ctx context.Context, gc *genConfig) ([]string, error) {
+	if gc.seedMiddle != nil {
+		return g.generateMiddleOut(ctx, gc)
+	}
+	return g.generateForward(ctx, gc, g.internSeed(gc.seed))
 }
 
 func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []interned.TokenID) ([]string, error) {
@@ -56,82 +68,6 @@ func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []i
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-	}
-	return nil, lastErr
-}
-
-func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]string, error) {
-	if g.reverseChain == nil {
-		return nil, errors.New("text: SeedMiddle requires Bidirectional() option at New")
-	}
-	seed := g.internSeed(gc.seedMiddle)
-	if len(seed) == 0 {
-		return g.generateForward(ctx, gc, nil)
-	}
-
-	revSeed := make([]interned.TokenID, len(seed))
-	copy(revSeed, seed)
-	slices.Reverse(revSeed)
-
-	fwdOpts := g.genOptions(seed, gc.maxTokens, gc.threads)
-	bwdOpts := g.genOptions(revSeed, gc.maxTokens, gc.threads)
-
-	var lastErr error
-	forwardOnly := false
-	for attempt := 0; attempt < gc.retries; attempt++ {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		var fwd, bwd []interned.TokenID
-		var fwdErr, bwdErr error
-		if forwardOnly {
-			fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
-		} else {
-			fwd, fwdErr, bwd, bwdErr = g.generateHalves(ctx, fwdOpts, bwdOpts)
-		}
-
-		if fwdErr != nil && !retryableAttempt(fwdErr) {
-			return nil, fwdErr
-		}
-		if bwdErr != nil && !retryableAttempt(bwdErr) {
-			return nil, bwdErr
-		}
-
-		if fwdErr != nil {
-			lastErr = fwdErr
-			// A successful reverse half must not turn a failed forward walk
-			// into a backward-only reply. Spend the remaining budget forward.
-			if bwdErr == nil {
-				forwardOnly = true
-			}
-			continue
-		}
-		if len(fwd) <= len(seed) {
-			lastErr = fmt.Errorf("barkov: no forward continuation after the seed: %w", barkov.ErrSentenceFailedValidation)
-			forwardOnly = true
-			continue
-		}
-
-		spliced := fwd
-		if !forwardOnly && bwdErr == nil {
-			slices.Reverse(bwd)
-			prefixLen := max(0, len(bwd)-len(seed))
-			spliced = make([]interned.TokenID, 0, prefixLen+len(fwd))
-			spliced = append(spliced, bwd[:prefixLen]...)
-			spliced = append(spliced, fwd...)
-		}
-
-		if gc.maxTokens > 0 && len(spliced) > gc.maxTokens {
-			lastErr = fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", gc.maxTokens, barkov.ErrSentenceFailedValidation)
-			continue
-		}
-		if g.messages != nil && g.messages.Contains(spliced) {
-			lastErr = fmt.Errorf("barkov: output failed validation: %w", barkov.ErrSentenceFailedValidation)
-			continue
-		}
-
-		return g.vocab.DecodeTokens(spliced), nil
 	}
 	return nil, lastErr
 }
@@ -185,22 +121,6 @@ func (g *Generator) genOptions(seed []interned.TokenID, maxTokens, threads int) 
 		opts = append(opts, barkov.WithParallelism[interned.TokenID](threads))
 	}
 	return opts
-}
-
-// generateHalves keeps a caller-owned RNG sequential. Independent package RNG
-// draws can run concurrently; every started half finishes before returning.
-func (g *Generator) generateHalves(ctx context.Context, forward, backward []barkov.GenOption[interned.TokenID]) (fwd []interned.TokenID, fwdErr error, bwd []interned.TokenID, bwdErr error) {
-	if g.fixedRNG {
-		fwd, fwdErr = barkov.Gen(ctx, g.chain, forward...)
-		bwd, bwdErr = barkov.Gen(ctx, g.reverseChain, backward...)
-		return
-	}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { defer wg.Done(); bwd, bwdErr = barkov.Gen(ctx, g.reverseChain, backward...) }()
-	fwd, fwdErr = barkov.Gen(ctx, g.chain, forward...)
-	wg.Wait()
-	return
 }
 
 // retryableAttempt rejects this candidate without weakening model constraints.

@@ -106,6 +106,7 @@ type GenOption func(*genConfig)
 type genConfig struct {
 	generationConfig
 	seed, seedMiddle []string
+	verbatimFallback bool
 }
 
 type generationConfig struct {
@@ -142,6 +143,7 @@ func Seed(words []string) GenOption {
 
 // SeedMiddle generates a sentence around the given words (middle-out).
 // Requires the Generator to have been constructed with Bidirectional().
+// Short seeds acquire observed history without lowering MinOrder or MinSupport.
 // Output must add words after the seed. A backward-only candidate is discarded;
 // remaining attempts generate forward-only from the same seed, within the
 // original retry and timeout budgets. If no seed words survive vocabulary
@@ -168,4 +170,12 @@ func WithRetries(n int) GenOption {
 // WithThreads overrides the parallelism width for this call. n must be nonnegative.
 func WithThreads(n int) GenOption {
 	return func(gc *genConfig) { gc.threads = n }
+}
+
+// WithVerbatimFallback retries an exhausted validation failure with copy
+// prevention disabled. The fallback has the same attempt limit and shares the
+// original timeout; seed, context, support and length constraints still apply.
+// It does not change the model or other concurrent calls.
+func WithVerbatimFallback() GenOption {
+	return func(gc *genConfig) { gc.verbatimFallback = true }
 }

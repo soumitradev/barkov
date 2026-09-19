@@ -18,11 +18,13 @@ import (
 // Generator is a ready-to-use, string-first text generator. Unless RNG was
 // set, its Generate/Sentence methods are safe to call concurrently.
 type Generator struct {
-	chain        barkov.GenerativeChain[interned.TokenID]
-	reverseChain barkov.GenerativeChain[interned.TokenID]
-	vocab        *interned.Vocabulary
-	defaults     generationConfig
-	fixedRNG     bool
+	chain          interned.BackoffChain
+	reverseChain   interned.BackoffChain
+	vocab          *interned.Vocabulary
+	defaults       generationConfig
+	fixedRNG       bool
+	minOrder       int
+	unknownContext interned.TokenID // absent from the immutable trained vocabulary
 
 	// messages holds fnv digests of every complete corpus message, so a
 	// short output that reproduces a whole message is caught even when it
@@ -77,11 +79,13 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	chain, revChain, messages := buildModels(encoded, interned.BackoffConfig{MaxOrder: maxOrder, MinOrder: cfg.minOrder, MinSupport: cfg.minSupport, MaxVerbatim: maxVerbatim}, cfg.antiVerbatim != 0, cfg.bidirectional)
 
 	g := &Generator{
-		chain:        chain,
-		reverseChain: revChain,
-		vocab:        vocab,
-		defaults:     cfg.generationConfig,
-		messages:     messages,
+		chain:          chain,
+		reverseChain:   revChain,
+		vocab:          vocab,
+		defaults:       cfg.generationConfig,
+		minOrder:       cfg.minOrder,
+		unknownContext: interned.TokenID(vocab.Size()),
+		messages:       messages,
 	}
 
 	g.SetRNG(cfg.rng)
@@ -163,13 +167,13 @@ func (g *Generator) States(order int) iter.Seq2[[]string, uint32] {
 	}
 }
 
-func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiVerbatim, bidirectional bool) (chain, revChain barkov.GenerativeChain[interned.TokenID], messages *interned.MessageSet) {
+func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiVerbatim, bidirectional bool) (chain, revChain interned.BackoffChain, messages *interned.MessageSet) {
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		chain = interned.BuildBackoff(cfg, encoded)
+		chain = interned.BuildBackoff(cfg, encoded).(interned.BackoffChain)
 	}()
 
 	if antiVerbatim {
@@ -191,7 +195,7 @@ func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiV
 				slices.Reverse(rev)
 				reversedEncoded[i] = rev
 			}
-			revChain = interned.BuildBackoff(cfg, reversedEncoded)
+			revChain = interned.BuildBackoff(cfg, reversedEncoded).(interned.BackoffChain)
 		}()
 	}
 

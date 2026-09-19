@@ -43,10 +43,12 @@ func genFastCollect[T comparable, K comparable](
 	}
 }
 
-// fillInitialState writes [begin×pad, seed-tail...] into state. The
-// seed tail is the last len(state) tokens of seed (or all of seed if
-// shorter). state must already have its final length.
-func fillInitialState[T comparable](state []T, seed []T, begin T) {
+// fillInitialState uses an explicit state when supplied, otherwise the seed.
+// Only seed tokens are emitted, independently of the history used by the walk.
+func fillInitialState[T comparable](state, initial, seed []T, begin T) {
+	if initial != nil {
+		seed = initial
+	}
 	for i := range state {
 		state[i] = begin
 	}
@@ -204,7 +206,7 @@ func genIterSingle[T comparable](
 			}
 		}
 
-		fillInitialState(state, cfg.seed, sentinels.Begin)
+		fillInitialState(state, cfg.initialState, cfg.seed, sentinels.Begin)
 
 		var keepGoing bool
 		var emitted int
@@ -309,7 +311,7 @@ func genIterSingleFast[T comparable, K comparable](
 		// genIterSingle only selects this path for N ∈ 1..8.
 		var stateBuf [8]T
 		state := stateBuf[:stateSize]
-		fillInitialState(state, cfg.seed, sentinels.Begin)
+		fillInitialState(state, cfg.initialState, cfg.seed, sentinels.Begin)
 
 		var keepGoing bool
 		var emitted int
