@@ -48,6 +48,10 @@ func (e errorCause) Error() string {
 	return string(e)
 }
 
+// ErrInsufficientSupport means a context exists but fails the configured
+// observation threshold. It is distinct from a genuinely missing state.
+const ErrInsufficientSupport = errorCause("insufficient context observations")
+
 const ErrStateNotFound = errorCause("state does not exist in model")
 const ErrSentenceTooShort = errorCause("generated sentence too short")
 const ErrSentenceFailedValidation = errorCause("sentence failed validation")

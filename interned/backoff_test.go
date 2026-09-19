@@ -300,8 +300,8 @@ func loadPublicCorpusInterned(t *testing.T) [][]string {
 // and the zero-value defaults.
 func TestBackoffConfigValidation(t *testing.T) {
 	valid := BackoffConfig{}.withDefaults()
-	if valid.MaxOrder != 6 || valid.MinSupport != 3 || valid.MaxVerbatim != 6 {
-		t.Errorf("zero-value defaults = %+v, want MaxOrder 6, MinSupport 3, MaxVerbatim 6", valid)
+	if valid.MaxOrder != 6 || valid.MinSupport != 1 || valid.MaxVerbatim != 6 {
+		t.Errorf("zero-value defaults = %+v, want MaxOrder 6, MinSupport 1, MaxVerbatim 6", valid)
 	}
 
 	for _, bad := range []BackoffConfig{

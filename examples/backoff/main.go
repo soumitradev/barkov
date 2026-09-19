@@ -31,7 +31,7 @@ func main() {
 
 	// The knobs, set low so a toy corpus can still generate. On real
 	// corpora the zero-value config is what you want: MaxOrder 6,
-	// MinSupport 3, MaxVerbatim 6.
+	// MinSupport 1, MaxVerbatim 6.
 	//
 	//   MaxOrder:    longest context tried (2-8)
 	//   MinSupport:  observations a context needs to be trusted

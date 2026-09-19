@@ -15,9 +15,12 @@ import (
 type BackoffConfig struct {
 	// MaxOrder is the longest context tried, 2..8. Default 6.
 	MaxOrder int
+	// MinOrder is the shortest context allowed during generation, 1..MaxOrder.
+	// Default 1. Lower-order tables remain available for verbatim checks.
+	MinOrder int
 	// MinSupport is the minimum observation count (ChoicesIndex.Obs) a
-	// context at order >= 2 needs to be used; order 1 is exempt (it is
-	// the unconditional fallback). Default 3. Range 1..65535.
+	// context needs to be used, independently of its order. Default 1.
+	// Range 1..65535; no order is exempt.
 	MinSupport int
 	// MaxVerbatim is the longest run of consecutive emitted tokens
 	// allowed to reproduce a corpus n-gram verbatim. Steering filters
@@ -45,8 +48,14 @@ func (cfg BackoffConfig) withDefaults() BackoffConfig {
 	if cfg.MaxOrder < 2 || cfg.MaxOrder > 8 {
 		panic(fmt.Sprintf("interned: BuildBackoff: MaxOrder %d outside supported range 2..8", cfg.MaxOrder))
 	}
+	if cfg.MinOrder == 0 {
+		cfg.MinOrder = 1
+	}
+	if cfg.MinOrder < 1 || cfg.MinOrder > cfg.MaxOrder {
+		panic(fmt.Sprintf("interned: BuildBackoff: MinOrder %d outside supported range 1..%d", cfg.MinOrder, cfg.MaxOrder))
+	}
 	if cfg.MinSupport == 0 {
-		cfg.MinSupport = 3
+		cfg.MinSupport = 1
 	}
 	if cfg.MinSupport < 1 || cfg.MinSupport > 65535 {
 		panic(fmt.Sprintf("interned: BuildBackoff: MinSupport %d outside supported range 1..65535", cfg.MinSupport))
@@ -108,7 +117,7 @@ func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 // backoffCore does the variable-order walk over a stack of per-order
 // indexed tables. At each step it tries the longest context first and
 // backs off to shorter ones until it finds a state with enough corpus
-// support (MinSupport); order 1 is the unconditional fallback. The walk
+// support (MinSupport), down to MinOrder. The walk
 // is stateless — a pure function of the state window plus RNG — so a
 // built chain is safe for concurrent readers, except under SetRNG.
 type backoffCore struct {
@@ -168,29 +177,34 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 	// orderTable interface call, so escape analysis can't stack it, and
 	// order-1 contexts on common tokens have thousands of candidates.
 	var probeBuf [8]TokenID
-	sawState := false
-	for m := b.cfg.MaxOrder; m >= 1; m-- {
+	sawState, sawSupported := false, false
+	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
 		tail := window[len(window)-m:]
 		idx, ok := b.tables[m-1].lookupTail(tail)
 		if !ok {
 			continue
 		}
-		if m > 1 && uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
+		sawState = true
+		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
 			continue // thin evidence; a shorter order has more
 		}
-		sawState = true
+		sawSupported = true
 		if tok, ok := b.sample(m, idx, window, sv, &probeBuf); ok {
 			return tok, nil
 		}
 		// All candidates at this order extend a verbatim run; back off.
 	}
 	var zero TokenID
-	if sawState {
+	if sawSupported {
 		return zero, fmt.Errorf("barkov: all continuations extend a verbatim run: %w",
 			barkov.ErrSentenceFailedValidation)
 	}
-	return zero, fmt.Errorf("barkov: state %v not in model at any order: %w",
-		window, barkov.ErrStateNotFound)
+	if sawState {
+		return zero, fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
+			b.cfg.MinOrder, b.cfg.MaxOrder, b.cfg.MinSupport, barkov.ErrInsufficientSupport)
+	}
+	return zero, fmt.Errorf("barkov: no observed context at orders %d..%d: %w",
+		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
 }
 
 // runLongEnough reports whether the window's last MaxVerbatim-1 tokens
@@ -210,10 +224,10 @@ func (b *backoffCore) runLongEnough(window []TokenID) bool {
 type steerMode uint8
 
 const (
-	steerOff     steerMode = iota // steering inactive (or nothing to filter)
-	steerSingle                   // steering state has exactly one follower
-	steerSet                      // small follower set: linear membership scan
-	steerBig                      // large follower set: per-candidate table probe
+	steerOff    steerMode = iota // steering inactive (or nothing to filter)
+	steerSingle                  // steering state has exactly one follower
+	steerSet                     // small follower set: linear membership scan
+	steerBig                     // large follower set: per-candidate table probe
 )
 
 // steerView is the per-step snapshot of the steering state: the followers
@@ -456,12 +470,12 @@ func buildOrderTable(order int, corpus [][]TokenID) orderTable {
 // BuildBackoff constructs a variable-order chain from a pre-interned
 // corpus: at each step the walk uses the longest context (up to
 // cfg.MaxOrder) with at least cfg.MinSupport corpus observations, backing
-// off to shorter contexts — and ultimately order 1 — where the data is
+// off to shorter contexts down to MinOrder where the data is
 // thin. Compared to a fixed-order chain, which replays corpus spans
 // verbatim wherever a long context has exactly one continuation, backoff
 // samples where the corpus genuinely branches.
 //
-// The zero-value config gives MaxOrder 6, MinSupport 3, and verbatim
+// The zero-value config gives MaxOrder 6, MinOrder 1, MinSupport 1, and verbatim
 // steering at window MaxOrder. Panics on out-of-range config values,
 // matching the Build convention.
 //

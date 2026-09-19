@@ -3,6 +3,7 @@ package text_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"math/rand/v2"
 	"os"
 	"slices"
@@ -287,8 +288,10 @@ func TestNewErrors(t *testing.T) {
 
 func TestMaxTokens(t *testing.T) {
 	ctx := context.Background()
-	// Construction-time cap: all generated outputs must be <= 5 tokens
-	g, err := text.New(smallCorpus, text.Order(2), text.AntiVerbatim(0), text.MaxTokens(5), text.Retries(32))
+	// Include both a short and a long valid path; a token cap must not rely
+	// on support-based fallback to invent a shorter sentence.
+	corpus := [][]string{{"one", "two", "three"}, {"one", "two", "three", "four", "five"}}
+	g, err := text.New(corpus, text.Order(2), text.AntiVerbatim(0), text.MaxTokens(5), text.Retries(32), text.RNG(rand.New(rand.NewPCG(7, 7))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,9 +312,12 @@ func TestMaxTokens(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Generate with WithMaxTokens(4): %v", err)
 		}
-		if len(out) > 4 {
-			t.Fatalf("expected output length <= 4, got %d: %v", len(out), out)
+		if len(out) != 3 {
+			t.Fatalf("expected the short complete path, not a truncated long path: %v", out)
 		}
+	}
+	if out, err := g.Generate(ctx, text.Seed([]string{"one", "two", "three", "four"}), text.WithMaxTokens(4), text.WithRetries(1)); !errors.Is(err, barkov.ErrSentenceFailedValidation) || out != nil {
+		t.Fatalf("impossible cap should reject without partial output: %v %v", out, err)
 	}
 }
 

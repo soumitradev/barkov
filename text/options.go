@@ -15,6 +15,8 @@ const avDefault = -1
 type config struct {
 	generationConfig
 	order         int
+	minOrder      int
+	minSupport    int
 	antiVerbatim  int
 	bidirectional bool
 	rng           *rand.Rand
@@ -23,7 +25,7 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		generationConfig: generationConfig{timeout: 10 * time.Second, retries: 64},
-		order:            4, antiVerbatim: avDefault,
+		order:            4, minOrder: 1, minSupport: 1, antiVerbatim: avDefault,
 	}
 }
 
@@ -45,6 +47,16 @@ type Option func(*config)
 //	| 5          | 7                 | 7                       |
 //	| 6..8       | 8                 | 8                       |
 func Order(n int) Option { return func(c *config) { c.order = n } }
+
+// MinOrder sets the shortest context the engine may use, in tokens. Default 1.
+// It must be between 1 and min(Order()+2, 8). Generation fails instead of
+// falling below this floor when evidence or allowed continuations run out.
+func MinOrder(n int) Option { return func(c *config) { c.minOrder = n } }
+
+// MinSupport requires at least n observations of a context before using it.
+// Default 1; range 1..65535. This applies to every allowed context order,
+// including MinOrder. Raising it can reject otherwise observed continuations.
+func MinSupport(n int) Option { return func(c *config) { c.minSupport = n } }
 
 // Timeout is the per-Generate time budget applied to the context. Default
 // 10s; 0 means no added timeout (the caller's context still applies).

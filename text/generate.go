@@ -14,7 +14,7 @@ import (
 
 // Generate returns one generated message as tokens. Seed words that survive
 // vocabulary lookup lead the output (or sit mid-sentence under SeedMiddle).
-// It retries on anti-verbatim or length rejection up to the configured Retries,
+// It retries on anti-verbatim, length or support rejection up to Retries,
 // and returns context and barkov errors unchanged.
 func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, error) {
 	gc := genConfig{generationConfig: g.defaults}
@@ -49,7 +49,7 @@ func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []i
 		if err == nil {
 			return g.vocab.DecodeTokens(out), nil
 		}
-		if !errors.Is(err, barkov.ErrSentenceFailedValidation) {
+		if !retryableAttempt(err) {
 			return nil, err
 		}
 		lastErr = err
@@ -84,10 +84,10 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 
 		fwd, fwdErr, bwd, bwdErr := g.generateHalves(ctx, fwdOpts, bwdOpts)
 
-		if fwdErr != nil && !errors.Is(fwdErr, barkov.ErrSentenceFailedValidation) {
+		if fwdErr != nil && !retryableAttempt(fwdErr) {
 			return nil, fwdErr
 		}
-		if bwdErr != nil && !errors.Is(bwdErr, barkov.ErrSentenceFailedValidation) {
+		if bwdErr != nil && !retryableAttempt(bwdErr) {
 			return nil, bwdErr
 		}
 
@@ -192,4 +192,9 @@ func (g *Generator) generateHalves(ctx context.Context, forward, backward []bark
 	fwd, fwdErr = barkov.Gen(ctx, g.chain, forward...)
 	wg.Wait()
 	return
+}
+
+// retryableAttempt rejects this candidate without weakening model constraints.
+func retryableAttempt(err error) bool {
+	return errors.Is(err, barkov.ErrSentenceFailedValidation) || errors.Is(err, barkov.ErrInsufficientSupport)
 }

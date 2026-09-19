@@ -68,6 +68,8 @@ The construction options and their defaults:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `Order(n)` | `4` | Context scale `2..8`; the longest context is `min(n+2, 8)`, so `Order(4)` looks back up to six tokens |
+| `MinOrder(n)` | `1` | Shortest allowed context in tokens, `1..min(Order+2, 8)`; generation fails rather than falling below it |
+| `MinSupport(n)` | `1` | Minimum observations required at every allowed order, `1..65535`; independent of context length |
 | `AntiVerbatim(n)` | Longest context | Steering rejects continuations completing a corpus n-gram; positive widths are clamped to `2..min(Order+2, 8)`. `0` disables steering and whole-message rejection |
 | `MaxTokens(n)` | `0` | Maximum output length, including the seed; `0` means unlimited |
 | `Timeout(d)` | `10*time.Second` | Budget across all retries in one call; `0` adds no timeout, but the caller's context still applies |
@@ -129,13 +131,14 @@ And the engine `text` uses, exposed directly:
 ```go
 chain := interned.BuildBackoff(interned.BackoffConfig{
     MaxOrder:    6, // longest context, 2-8; default 6
-    MinSupport:  3, // minimum observations for contexts of order >= 2
+    MinOrder:    1, // shortest allowed context; default 1
+    MinSupport:  1, // minimum observations, independently of context length
     MaxVerbatim: 6, // block copied six-token spans; -1 disables steering
 }, encoded)
 ids, err := barkov.Gen(ctx, chain)
 ```
 
-`BackoffConfig{}` selects those defaults. `MinSupport` accepts `1..65535`; `MaxVerbatim` accepts `2..MaxOrder`, with `0` selecting `MaxOrder`. `Build` and `BuildBackoff` panic on out-of-range configuration. The higher-level `text.New` returns configuration errors instead. Unlike `text`, direct `BuildBackoff` doesn't install the whole-message validator or retry rejected attempts for you.
+`BackoffConfig{}` selects those defaults. `MinOrder` accepts `1..MaxOrder` (`0` selects `1`); the floor applies both to sparse contexts and copy-prevention fallback. Begin-of-message padding still supplies context at startup. A higher floor can leave seeds or attempts without any supported continuation. Lower-order tables remain available for copy detection and state inspection. `MinSupport` accepts `1..65535` and applies even at `MinOrder`; its default is now `1` rather than the previous hidden `3`. Higher values reject rare contexts and may exhaust the permitted orders; `MaxVerbatim` accepts `2..MaxOrder`, with `0` selecting `MaxOrder`. `Build` and `BuildBackoff` panic on out-of-range configuration. The higher-level `text.New` returns configuration errors instead. Unlike `text`, direct `BuildBackoff` doesn't install the whole-message validator or retry rejected attempts for you.
 
 Why not always run a fixed-order chain? On real text many states have exactly one continuation, so the walk replays the corpus verbatim with a random branch every once in a while. Backoff tries the longest context with enough observations and an allowed continuation, falling back to shorter contexts where the corpus is thin or steering excludes every candidate.
 
@@ -158,7 +161,7 @@ Core generation makes one attempt by default. `WithSeed`, `WithMaxTokens`, and t
 
 `Gen` discards partial output on failure. `GenIter` can already have yielded a prefix when a later step fails, so keep that in mind when writing directly to an output stream. Whole-output validation and parallel generation buffer the candidate before yielding it.
 
-Use `errors.Is` with `barkov.ErrSentenceFailedValidation` for rejected or over-length attempts, `barkov.ErrStateNotFound` for an unavailable state, and `context.Canceled` / `context.DeadlineExceeded` for cancellation. `text.Generate` retries validation and length failures up to its configured budget; it returns other errors immediately.
+Use `errors.Is` with `barkov.ErrSentenceFailedValidation` for rejected or over-length attempts, `barkov.ErrInsufficientSupport` for observed contexts below the support threshold, `barkov.ErrStateNotFound` for an unavailable state, and `context.Canceled` / `context.DeadlineExceeded` for cancellation. `text.Generate` retries validation, length and support failures up to its configured budget; it returns other errors immediately.
 
 ## Validators
 

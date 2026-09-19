@@ -56,6 +56,12 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	}
 
 	maxOrder := min(cfg.order+2, 8)
+	if cfg.minOrder < 1 || cfg.minOrder > maxOrder {
+		return nil, fmt.Errorf("text: MinOrder(%d) out of range 1..%d", cfg.minOrder, maxOrder)
+	}
+	if cfg.minSupport < 1 || cfg.minSupport > 65535 {
+		return nil, fmt.Errorf("text: MinSupport(%d) out of range 1..65535", cfg.minSupport)
+	}
 	maxVerbatim := -1 // AntiVerbatim(0): steering off
 	if cfg.antiVerbatim != 0 {
 		window := cfg.antiVerbatim
@@ -68,7 +74,7 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	vocab := interned.NewVocabulary()
 	encoded := vocab.InternCorpus(corpus)
 
-	chain, revChain, messages := buildModels(encoded, interned.BackoffConfig{MaxOrder: maxOrder, MaxVerbatim: maxVerbatim}, cfg.antiVerbatim != 0, cfg.bidirectional)
+	chain, revChain, messages := buildModels(encoded, interned.BackoffConfig{MaxOrder: maxOrder, MinOrder: cfg.minOrder, MinSupport: cfg.minSupport, MaxVerbatim: maxVerbatim}, cfg.antiVerbatim != 0, cfg.bidirectional)
 
 	g := &Generator{
 		chain:        chain,
