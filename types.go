@@ -8,7 +8,8 @@ const END = "</END/>"
 
 // GenerativeChain is the minimum interface needed to generate text.
 // All methods are EXPORTED so users in other packages can implement
-// their own chain types.
+// their own chain types. Move receives an immutable string it may retain.
+// Move must return promptly so cancellation and worker shutdown can finish.
 //
 // Gen computes the validator window as StateSize()+2 by default; that
 // policy is fixed here and not a knob on the interface. Use

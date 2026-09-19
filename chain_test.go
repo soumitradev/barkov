@@ -464,12 +464,13 @@ func TestPruneCascadeFrictionRepro(t *testing.T) {
 // after Prune(k) the chain has no dangling transitions (checked two ways:
 // Validate and an independent re-walk) and Gen never faults mid-walk.
 func TestPruneCascadePublicCorpus(t *testing.T) {
+	corpus := loadPublicCorpus(t)
 	enc := SepEncoder{Sep: SEP}
 	beginKey := enc.Encode([]string{BEGIN, BEGIN, BEGIN, BEGIN})
 
 	for _, minCount := range []uint32{2, 5} {
 		t.Run(fmt.Sprintf("minCount=%d", minCount), func(t *testing.T) {
-			chain := InitChain(4).BuildRaw(testCorpus)
+			chain := InitChain(4).BuildRaw(corpus)
 			chain.Prune(minCount)
 
 			if err := chain.Validate(); err != nil {

@@ -27,13 +27,13 @@ func (PackedEncoder) AppendEncoded(dst []byte, ids []TokenID) []byte {
 	return append(dst, b...)
 }
 
-// Decode unpacks a string key back into a slice of TokenIDs.
+// Decode unpacks a string key, returning nil for incomplete token bytes.
 func (PackedEncoder) Decode(state string) []TokenID {
 	n := len(state) / 4
-	if n == 0 {
+	if n == 0 || len(state)%4 != 0 {
 		return nil
 	}
 	ids := make([]TokenID, n)
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(&ids[0])), len(state)), state)
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&ids[0])), n*4), state)
 	return ids
 }

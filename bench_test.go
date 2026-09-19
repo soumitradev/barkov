@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -15,78 +16,69 @@ var testCompressed *CompressedChain[string]
 var testValidator func([]string) bool
 var testSeedTokens []string
 
-func init() {
-	f, err := os.Open("testdata/corpus_public.txt")
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
+var benchmarkOnce sync.Once
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Skip Project Gutenberg metadata lines and blank lines
-		if line == "" || strings.HasPrefix(line, "***") || strings.HasPrefix(line, "  ") {
-			continue
-		}
-		tokens := strings.Fields(line)
-		if len(tokens) >= 4 {
-			testCorpus = append(testCorpus, tokens)
-		}
-	}
+func loadBenchmarkFixture(b *testing.B) {
+	b.Helper()
+	benchmarkOnce.Do(func() {
+		testCorpus = loadPublicCorpus(b)
 
-	testChain = InitChain(4).BuildRaw(testCorpus)
-	testCompressed = testChain.Compress()
+		testChain = InitChain(4).BuildRaw(testCorpus)
+		testCompressed = testChain.Compress()
 
-	// Build map-based n-gram validator (string equivalent of NGramSet)
-	n := testChain.StateSize() + 2
-	grams := make(map[string]struct{})
-	for _, tokens := range testCorpus {
-		for i := 0; i <= len(tokens)-n; i++ {
-			grams[strings.Join(tokens[i:i+n], SEP)] = struct{}{}
-		}
-	}
-	testValidator = func(gram []string) bool {
-		_, found := grams[strings.Join(gram, SEP)]
-		return !found
-	}
-
-	// Find a seed state with low END-transition probability so seeded benchmarks
-	// produce full sentences rather than fast-failing with ErrSentenceTooShort.
-	for _, tokens := range testCorpus {
-		if len(tokens) < 20 {
-			continue
-		}
-		// Take a 4-gram from the middle of a long sentence
-		mid := len(tokens) / 2
-		state := strings.Join(tokens[mid : mid+testChain.stateSize], SEP)
-		choices, ok := testChain.Model[state]
-		if !ok {
-			continue
-		}
-		var total, endCount uint32
-		for tok, count := range choices {
-			total += count
-			if tok == END {
-				endCount += count
+		// Build map-based n-gram validator (string equivalent of NGramSet)
+		n := testChain.StateSize() + 2
+		grams := make(map[string]struct{})
+		for _, tokens := range testCorpus {
+			for i := 0; i <= len(tokens)-n; i++ {
+				grams[strings.Join(tokens[i:i+n], SEP)] = struct{}{}
 			}
 		}
-		if total >= 5 && float64(endCount)/float64(total) < 0.15 {
-			testSeedTokens = tokens[mid : mid+testChain.stateSize]
-			break
+		testValidator = func(gram []string) bool {
+			_, found := grams[strings.Join(gram, SEP)]
+			return !found
 		}
-	}
+
+		// Find a seed state with low END-transition probability so seeded benchmarks
+		// produce full sentences rather than fast-failing with ErrSentenceTooShort.
+		for _, tokens := range testCorpus {
+			if len(tokens) < 20 {
+				continue
+			}
+			// Take a 4-gram from the middle of a long sentence
+			mid := len(tokens) / 2
+			state := strings.Join(tokens[mid:mid+testChain.stateSize], SEP)
+			choices, ok := testChain.Model[state]
+			if !ok {
+				continue
+			}
+			var total, endCount uint32
+			for tok, count := range choices {
+				total += count
+				if tok == END {
+					endCount += count
+				}
+			}
+			if total >= 5 && float64(endCount)/float64(total) < 0.15 {
+				testSeedTokens = tokens[mid : mid+testChain.stateSize]
+				break
+			}
+		}
+	})
 }
 
 // --- Build / Compress ---
 
 func BenchmarkBuild(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	for b.Loop() {
 		InitChain(4).BuildRaw(testCorpus)
 	}
 }
 
 func BenchmarkCompress(b *testing.B) {
+	loadBenchmarkFixture(b)
 	chain := InitChain(4).BuildRaw(testCorpus)
 	b.ResetTimer()
 	for b.Loop() {
@@ -95,6 +87,8 @@ func BenchmarkCompress(b *testing.B) {
 }
 
 func BenchmarkBuildCompressed(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	for b.Loop() {
 		InitChain(4).BuildCompressed(testCorpus)
 	}
@@ -121,6 +115,8 @@ func BenchmarkSepEncoderDecode(b *testing.B) {
 // --- Generation ---
 
 func BenchmarkGen(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		Gen(ctx, testCompressed) //nolint
@@ -132,6 +128,8 @@ func BenchmarkGen(b *testing.B) {
 // The chain is seeded with a deterministic PCG so each iteration does
 // identical work — variance reflects runtime/GC jitter, not RNG draws.
 func BenchmarkGenHeavy(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		testCompressed.SetRNG(rand.New(rand.NewPCG(0xb4, 0xc0)))
@@ -143,6 +141,8 @@ func BenchmarkGenHeavy(b *testing.B) {
 }
 
 func BenchmarkGenIter(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		var out []string
@@ -157,6 +157,8 @@ func BenchmarkGenIter(b *testing.B) {
 }
 
 func BenchmarkGenWithValidator(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		Gen(ctx, testCompressed, WithValidator(testValidator)) //nolint
@@ -164,6 +166,8 @@ func BenchmarkGenWithValidator(b *testing.B) {
 }
 
 func BenchmarkGenThreaded(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		Gen(ctx, testCompressed, WithValidator(testValidator), WithThreaded[string]()) //nolint
@@ -171,6 +175,8 @@ func BenchmarkGenThreaded(b *testing.B) {
 }
 
 func BenchmarkGenWithSeed(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		Gen(ctx, testCompressed, WithSeed(testSeedTokens)) //nolint
@@ -183,6 +189,8 @@ func BenchmarkGenWithSeed(b *testing.B) {
 // corpus, compress it, and generate one sentence. Tracks cumulative
 // speedup across versions.
 func BenchmarkEndToEnd(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	for b.Loop() {
 		chain := InitChain(4).BuildRaw(testCorpus)
@@ -194,9 +202,38 @@ func BenchmarkEndToEnd(b *testing.B) {
 // --- Validator ---
 
 func BenchmarkValidatorCall(b *testing.B) {
+	loadBenchmarkFixture(b)
 	gram := strings.Fields("Call me Ishmael Some years ago never mind")
 	b.ResetTimer()
 	for b.Loop() {
 		testValidator(gram)
 	}
+}
+
+func loadPublicCorpus(b testing.TB) [][]string {
+	b.Helper()
+	var corpus [][]string
+	f, err := os.Open("testdata/corpus_public.txt")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Skip Project Gutenberg metadata lines and blank lines
+		if line == "" || strings.HasPrefix(line, "***") || strings.HasPrefix(line, "  ") {
+			continue
+		}
+		tokens := strings.Fields(line)
+		if len(tokens) >= 4 {
+			corpus = append(corpus, tokens)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		b.Fatal(err)
+	}
+	return corpus
 }

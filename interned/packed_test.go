@@ -2,6 +2,7 @@ package interned
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -76,5 +77,16 @@ func BenchmarkPackedEncoderDecode(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_ = enc.Decode(str)
+	}
+}
+
+func TestPackedEncoderRejectsPartialToken(t *testing.T) {
+	for n := 1; n < 32; n++ {
+		if n%4 == 0 {
+			continue
+		}
+		if got := (PackedEncoder{}).Decode(strings.Repeat("x", n)); got != nil {
+			t.Fatalf("decoded incomplete token bytes (%d): %v", n, got)
+		}
 	}
 }

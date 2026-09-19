@@ -6,12 +6,10 @@ import (
 	"testing"
 )
 
-// TestDepsStdlibOnly is a durable invariant check for Rule R4: the core
+// TestDepsStdlibOnly checks the public guarantee that the core
 // packages of this module must not pull in any external dependencies.
 // Only hashers/xxh3 and hashers/xxhash64 are allowed to import external
 // modules (they exist specifically to wrap zeebo/xxh3 and cespare/xxhash).
-//
-// NOTE: after J.6 adds the ./text package, it must be added to this list.
 func TestDepsStdlibOnly(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH; skipping dependency closure check")

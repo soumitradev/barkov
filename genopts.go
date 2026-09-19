@@ -1,6 +1,9 @@
 package barkov
 
-import "runtime"
+import (
+	"fmt"
+	"runtime"
+)
 
 // StuckDetector is the interface for stuck-state detection. Implementations
 // track which seeds repeatedly fail and allow short-circuiting retries.
@@ -12,7 +15,9 @@ type StuckDetector interface {
 }
 
 // SlicePool is an optional pool for reusing slice allocations across
-// generation attempts. The core package ships with NoPool (no reuse).
+// generation attempts. Returned slices may have any capacity; generation grows
+// them as needed and returns the updated buffers. Pools used with parallel
+// workers must be safe for concurrent access. The core ships with NoPool.
 // The barkov/interned subpackage provides a sync.Pool-backed implementation.
 type SlicePool[T any] interface {
 	GetState() *[]T
@@ -24,10 +29,10 @@ type SlicePool[T any] interface {
 // NoPool is a SlicePool that allocates fresh slices every time.
 type NoPool[T any] struct{}
 
-func (NoPool[T]) GetState() *[]T        { s := make([]T, 0, 16); return &s }
-func (NoPool[T]) PutState(*[]T)         {}
-func (NoPool[T]) GetGenerated() *[]T    { s := make([]T, 0, 128); return &s }
-func (NoPool[T]) PutGenerated(*[]T)     {}
+func (NoPool[T]) GetState() *[]T     { s := make([]T, 0, 16); return &s }
+func (NoPool[T]) PutState(*[]T)      {}
+func (NoPool[T]) GetGenerated() *[]T { s := make([]T, 0, 128); return &s }
+func (NoPool[T]) PutGenerated(*[]T)  {}
 
 // GenOption configures a generation call. All options are functional;
 // the unexported config struct keeps internals private.
@@ -36,7 +41,7 @@ type GenOption[T comparable] func(*genConfig[T])
 type genConfig[T comparable] struct {
 	seed            []T
 	validator       func([]T) bool
-	validatorWidth  int // window width for validator; 0 = default to StateSize+2
+	validatorWidth  int // 0 = default; WithNGramValidator requires a positive width
 	parallelism     int // 0 = single-threaded; >0 = goroutine count
 	stuckCache      StuckDetector
 	pool            SlicePool[T]
@@ -59,7 +64,10 @@ func WithSeed[T comparable](seed []T) GenOption[T] {
 // are never passed to the validator; use WithOutputValidator to check
 // short or complete outputs.
 func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
-	return func(c *genConfig[T]) { c.validator = v }
+	return func(c *genConfig[T]) {
+		c.validator = v
+		c.validatorWidth = 0
+	}
 }
 
 // WithOutputValidator installs a whole-output validator. It is called
@@ -92,6 +100,10 @@ func WithNGramValidator[T comparable](v WindowValidator[T]) GenOption[T] {
 	return func(c *genConfig[T]) {
 		c.validator = v.Validate
 		c.validatorWidth = v.N()
+		if c.validatorWidth == 0 {
+			// Reserve zero for WithValidator's default; an explicit zero is invalid.
+			c.validatorWidth = -1
+		}
 	}
 }
 
@@ -118,4 +130,17 @@ func WithStuckDetector[T comparable](d StuckDetector) GenOption[T] {
 // the duration of this call.
 func WithSlicePool[T comparable](p SlicePool[T]) GenOption[T] {
 	return func(c *genConfig[T]) { c.pool = p }
+}
+
+func (c *genConfig[T]) validate() error {
+	if c.parallelism < 0 {
+		return fmt.Errorf("barkov: parallelism must be nonnegative")
+	}
+	if c.maxTokens < 0 {
+		return fmt.Errorf("barkov: maximum tokens must be nonnegative")
+	}
+	if c.validatorWidth < 0 {
+		return fmt.Errorf("barkov: validator width must be positive")
+	}
+	return nil
 }

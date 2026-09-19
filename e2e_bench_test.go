@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -18,32 +19,43 @@ var e2eCorpus [][]string
 var e2eCorpusInterned [][]interned.TokenID
 var e2eVocab *interned.Vocabulary
 
-func init() {
-	f, err := os.Open("testdata/corpus_public.txt")
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
+var e2eOnce sync.Once
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" || strings.HasPrefix(line, "***") || strings.HasPrefix(line, "  ") {
-			continue
+func loadE2EFixture(b *testing.B) {
+	b.Helper()
+	e2eOnce.Do(func() {
+		f, err := os.Open("testdata/corpus_public.txt")
+		if err != nil {
+			b.Fatal(err)
 		}
-		tokens := strings.Fields(line)
-		if len(tokens) >= 4 {
-			e2eCorpus = append(e2eCorpus, tokens)
-		}
-	}
+		defer f.Close()
 
-	e2eVocab = interned.NewVocabulary()
-	e2eCorpusInterned = e2eVocab.InternCorpus(e2eCorpus)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" || strings.HasPrefix(line, "***") || strings.HasPrefix(line, "  ") {
+				continue
+			}
+			tokens := strings.Fields(line)
+			if len(tokens) >= 4 {
+				e2eCorpus = append(e2eCorpus, tokens)
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			b.Fatal(err)
+		}
+
+		e2eVocab = interned.NewVocabulary()
+		e2eCorpusInterned = e2eVocab.InternCorpus(e2eCorpus)
+	})
 }
 
 // BenchmarkEndToEndAllConfigs covers every combination of token type and
 // validator for end-to-end pipeline comparison across versions.
 func BenchmarkEndToEndAllConfigs(b *testing.B) {
+	loadE2EFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	enc := barkov.SepEncoder{Sep: barkov.SEP}
 	packedEnc := interned.PackedEncoder{}
@@ -150,6 +162,8 @@ func BenchmarkEndToEndAllConfigs(b *testing.B) {
 // (interning, indexed chain) rather than mixing in validator work.
 // Numbers from this benchmark back the speedup claim in the README.
 func BenchmarkPipelineSimpleVsMaxOpt(b *testing.B) {
+	loadE2EFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 
 	b.Run("simple", func(b *testing.B) {
@@ -174,6 +188,8 @@ func BenchmarkPipelineSimpleVsMaxOpt(b *testing.B) {
 // is meant to help, since rejected candidates force retries). Both
 // variants share the same validated Gen config; only the fan-out differs.
 func BenchmarkThreadedVsSequential(b *testing.B) {
+	loadE2EFixture(b)
+	b.ResetTimer()
 	ctx := context.Background()
 	packedEnc := interned.PackedEncoder{}
 	const n = 6

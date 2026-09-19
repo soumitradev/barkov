@@ -30,6 +30,11 @@ gen, err := text.New(corpus,
 out, err := gen.Generate(ctx, text.Seed([]string{"once", "upon"}))
 ```
 
+Construction and per-call overrides validate retry, thread, timeout, and token
+limits. A fixed `text.RNG` requires sequential generation (`Threads(0)` or
+`Threads(1)`); middle-out generation also runs sequentially with that RNG.
+Without an RNG override, generators support concurrent calls.
+
 `gen.Chain()` and `gen.Vocab()` hand you the underlying engine and vocabulary if you want to work with them directly. Full program: `examples/text`.
 
 ## Why
@@ -40,7 +45,7 @@ Not in scope: tokenization (you bring the tokens), combining models.
 
 ## The core API
 
-`text` is a thin wrapper over the core package, a few hundred lines with no magic in it. Drop to the core when you want a custom token type, your own validator, or direct access to the chain.
+The `text` package handles construction, retry budgets, and string conversion. Use the core package for custom token types, validators, or direct chain access.
 
 Strings, no extras:
 
@@ -80,7 +85,7 @@ Two footguns, and the options that remove them:
 
 The stock anti-verbatim validators are `NGramSet` (exact, fine on small corpora) and `nhash.HashNGramSet` (64-bit digests, roughly half the memory, ~1-in-2^64 false-positive rate). Under `BuildBackoff` and `text` steering they're redundant for n <= MaxVerbatim, since steering filters verbatim continuations during the walk. Validators remain the tool for everything else: profanity, length caps, POS patterns, whatever you like.
 
-Hashing is pluggable via `hashers.Hasher`: `xxh3` is the default fast choice, `xxhash64` an alternative, `fnv` zero-dep. `WithThreaded` fans generation across goroutines and takes the first accepted candidate; it only pays off when the validator rejects most attempts.
+Hashing is pluggable via `hashers.Hasher`: `xxh3` is the default fast choice, `xxhash64` an alternative, `fnv` zero-dep. `WithThreaded` fans generation across goroutines and takes the first accepted candidate; it only pays off when the validator rejects most attempts. Workers are canceled and joined before the call returns. Custom chains and callbacks must return promptly for cancellation to complete.
 
 ## Escape hatches
 
