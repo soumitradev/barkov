@@ -77,12 +77,19 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 	bwdOpts := g.genOptions(revSeed, gc.maxTokens, gc.threads)
 
 	var lastErr error
+	forwardOnly := false
 	for attempt := 0; attempt < gc.retries; attempt++ {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 
-		fwd, fwdErr, bwd, bwdErr := g.generateHalves(ctx, fwdOpts, bwdOpts)
+		var fwd, bwd []interned.TokenID
+		var fwdErr, bwdErr error
+		if forwardOnly {
+			fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
+		} else {
+			fwd, fwdErr, bwd, bwdErr = g.generateHalves(ctx, fwdOpts, bwdOpts)
+		}
 
 		if fwdErr != nil && !retryableAttempt(fwdErr) {
 			return nil, fwdErr
@@ -91,26 +98,28 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			return nil, bwdErr
 		}
 
-		var spliced []interned.TokenID
-		if fwdErr == nil && bwdErr == nil {
-			slices.Reverse(bwd)
-			prefixLen := len(bwd) - len(seed)
-			if prefixLen < 0 {
-				prefixLen = 0
+		if fwdErr != nil {
+			lastErr = fwdErr
+			// A successful reverse half must not turn a failed forward walk
+			// into a backward-only reply. Spend the remaining budget forward.
+			if bwdErr == nil {
+				forwardOnly = true
 			}
+			continue
+		}
+		if len(fwd) <= len(seed) {
+			lastErr = fmt.Errorf("barkov: no forward continuation after the seed: %w", barkov.ErrSentenceFailedValidation)
+			forwardOnly = true
+			continue
+		}
+
+		spliced := fwd
+		if !forwardOnly && bwdErr == nil {
+			slices.Reverse(bwd)
+			prefixLen := max(0, len(bwd)-len(seed))
 			spliced = make([]interned.TokenID, 0, prefixLen+len(fwd))
 			spliced = append(spliced, bwd[:prefixLen]...)
 			spliced = append(spliced, fwd...)
-		} else if fwdErr == nil {
-			// Graceful fallback to forward half if backward failed
-			spliced = fwd
-		} else if bwdErr == nil {
-			// Graceful fallback to backward half if forward failed
-			slices.Reverse(bwd)
-			spliced = bwd
-		} else {
-			lastErr = fwdErr
-			continue
 		}
 
 		if gc.maxTokens > 0 && len(spliced) > gc.maxTokens {

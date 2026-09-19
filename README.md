@@ -61,7 +61,7 @@ out, err := gen.Generate(ctx,
 )
 ```
 
-Seed lookup tries each word exactly, then lowercased. Unknown words are dropped; if none remain, generation is unseeded. `SeedMiddle` requires `Bidirectional()` at construction. It tries both directions and can use one successful half if the other fails validation.
+Seed lookup tries each word exactly, then lowercased. Unknown words are dropped; if none remain, generation is unseeded. `SeedMiddle` requires `Bidirectional()` at construction. It tries both directions and requires at least one new word after the seed. If only the backward half succeeds, or the forward half ends at the seed, it discards that candidate and spends the remaining attempts generating forward-only from the same seed. A successful forward half can still be used if the backward half fails validation. The fallback keeps the original retry/time budgets, length limits and copy protection; exhausted attempts return an error, never backward-only text or a seed-only echo.
 
 The construction options and their defaults:
 

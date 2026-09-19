@@ -142,7 +142,10 @@ func Seed(words []string) GenOption {
 
 // SeedMiddle generates a sentence around the given words (middle-out).
 // Requires the Generator to have been constructed with Bidirectional().
-// If no seed words survive vocabulary lookup, generation falls back to unseeded.
+// Output must add words after the seed. A backward-only candidate is discarded;
+// remaining attempts generate forward-only from the same seed, within the
+// original retry and timeout budgets. If no seed words survive vocabulary
+// lookup, generation falls back to unseeded.
 func SeedMiddle(words []string) GenOption {
 	return func(gc *genConfig) { gc.seedMiddle = words }
 }
