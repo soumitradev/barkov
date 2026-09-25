@@ -96,3 +96,15 @@ func TestEscapeViewKeepsLongestContextByDefault(t *testing.T) {
 		t.Fatalf("escape 0 should always use the start context: %v", got)
 	}
 }
+
+func TestEscapeFindsARareButAllowedContinuation(t *testing.T) {
+	// x is forbidden and nearly all the mass; y is allowed but reachable
+	// only by escaping twice (probability ~1e-9). Conditioning on steering
+	// must still return y rather than give up.
+	v := NewVocabulary()
+	encoded := v.InternCorpus(repeatCorpus("q a b x", 1000, "z b y", 1))
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).(BackoffChain).WithEscape(1)
+	if got := drawNext(t, chain, v, []string{"q", "a", "b"}, 200); got["y"] < 0.9999 {
+		t.Fatalf("rare allowed continuation: %v, want always y", got)
+	}
+}

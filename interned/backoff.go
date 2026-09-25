@@ -231,61 +231,70 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
 }
 
-// escapeDraws bounds the rejection loop of moveEscape. A step whose legal
-// mass is too small to be hit within this many draws fails like a step
-// whose every continuation is forbidden, and the sentence is retried.
-const escapeDraws = 256
-
 // moveEscape samples the interpolated mixture over context orders exactly,
-// conditioned on copy steering: draw the escape chain and a follower from
-// the unfiltered mixture, and if steering forbids that follower, restart the
-// whole draw. Filtering each order separately would renormalise orders
-// independently and skew the mixture (an order left with only END would
-// hand END that order's entire weight).
+// conditioned on copy steering. Each usable order m gets mixture weight a_m
+// (the probability that escaping stops there) times Z_m, the share of its
+// followers steering still allows; an order is drawn in proportion to
+// a_m·Z_m and a follower from its filtered distribution. Filtering and
+// renormalising each order alone would skew the mixture (an order left with
+// only END would hand END that order's entire weight).
 //
 // Orders whose context starts with two Begins repeat the shorter
-// message-start context and are skipped, so start padding counts once. When
-// every usable order escapes, the shortest usable one is sampled.
+// message-start context and are skipped, so start padding counts once. The
+// shortest usable order takes the remaining escape mass.
 func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, error) {
+	type component struct {
+		m      int
+		idx    barkov.ChoicesIndex
+		weight float64
+	}
+	var comps [8]component
+	n := 0
 	sawState, sawSupported := false, false
-	for range escapeDraws {
-		lastM, last := 0, barkov.ChoicesIndex{}
-		picked := false
-		var tok TokenID
-		for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
-			tail := window[len(window)-m:]
-			if m > b.cfg.MinOrder && tail[0] == b.sentinels.Begin && tail[1] == b.sentinels.Begin {
-				continue
-			}
-			idx, ok := b.tables[m-1].lookupTail(tail)
-			if !ok {
-				continue
-			}
-			sawState = true
-			if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
-				continue
-			}
-			sawSupported = true
-			lastM, last = m, idx
-			if m > b.cfg.MinOrder && b.escapes(m, idx) {
-				continue
-			}
-			tok, picked = b.follower(m, idx), true
-			break
+	stay := 1.0 // probability that escaping reaches the current order
+	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
+		tail := window[len(window)-m:]
+		if m > b.cfg.MinOrder && tail[0] == b.sentinels.Begin && tail[1] == b.sentinels.Begin {
+			continue
 		}
-		if !sawSupported {
-			break
+		idx, ok := b.tables[m-1].lookupTail(tail)
+		if !ok {
+			continue
 		}
-		if !picked {
-			tok = b.follower(lastM, last)
+		sawState = true
+		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
+			continue
 		}
-		if sv.mode == steerOff || !b.filtered(sv, window, tok, probeBuf) {
-			return tok, nil
+		sawSupported = true
+		e := 0.0
+		if m > b.cfg.MinOrder {
+			e = b.escapeProbability(m, idx)
 		}
+		comps[n] = component{m, idx, stay * (1 - e)}
+		n++
+		stay *= e
+	}
+	if n > 0 {
+		comps[n-1].weight += stay // no shorter order left to escape to
+	}
+	var total float64
+	for i := range n {
+		comps[i].weight *= b.allowedShare(comps[i].m, comps[i].idx, window, sv, probeBuf)
+		total += comps[i].weight
 	}
 	var zero TokenID
+	if total > 0 {
+		pick := b.float64() * total
+		for i := range n {
+			if pick -= comps[i].weight; pick < 0 || i == n-1 {
+				if tok, ok := b.sample(comps[i].m, comps[i].idx, window, sv, probeBuf); ok {
+					return tok, nil
+				}
+			}
+		}
+	}
 	if sawSupported {
-		return zero, fmt.Errorf("barkov: no continuation outside a verbatim run was drawn: %w", barkov.ErrSentenceFailedValidation)
+		return zero, fmt.Errorf("barkov: all continuations extend a verbatim run: %w", barkov.ErrSentenceFailedValidation)
 	}
 	if sawState {
 		return zero, fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
@@ -295,13 +304,27 @@ func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]To
 		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
 }
 
-// follower draws one follower of the order-m state idx, unfiltered.
-func (b *backoffCore) follower(m int, idx barkov.ChoicesIndex) TokenID {
+// allowedShare is the fraction of the order-m state's observations that
+// copy steering allows after window (1 when steering is off).
+func (b *backoffCore) allowedShare(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) float64 {
+	if sv.mode == steerOff {
+		return 1
+	}
 	if idx.Count == 1 {
-		return TokenID(idx.Offset)
+		if b.filtered(sv, window, TokenID(idx.Offset), probeBuf) {
+			return 0
+		}
+		return 1
 	}
 	choices, cum := b.tables[m-1].slices(idx)
-	return choices[b.draw(cum)]
+	var allowed, prev uint32
+	for i, tok := range choices {
+		if !b.filtered(sv, window, tok, probeBuf) {
+			allowed += cum[i] - prev
+		}
+		prev = cum[i]
+	}
+	return float64(allowed) / float64(cum[len(cum)-1])
 }
 
 // CopiesRun implements BackoffChain.
@@ -318,20 +341,23 @@ func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
 	return false
 }
 
-// escapes draws whether the walk leaves the order-m context idx for a
-// shorter one: probability escape·T/(N+T), capped at 1.
-func (b *backoffCore) escapes(m int, idx barkov.ChoicesIndex) bool {
+// escapeProbability is escape·T/(N+T) for the order-m state idx, capped at 1.
+func (b *backoffCore) escapeProbability(m int, idx barkov.ChoicesIndex) float64 {
 	t := float64(idx.Count)
 	n := float64(idx.Obs)
 	if idx.Count > 1 {
 		_, cum := b.tables[m-1].slices(idx)
 		n = float64(cum[len(cum)-1])
 	}
-	p := b.escape * t / (n + t)
+	return min(1, b.escape*t/(n+t))
+}
+
+// float64 draws from [0, 1) using the configured RNG.
+func (b *backoffCore) float64() float64 {
 	if b.rng != nil {
-		return b.rng.Float64() < p
+		return b.rng.Float64()
 	}
-	return rand.Float64() < p
+	return rand.Float64()
 }
 
 // runLongEnough reports whether the window's last MaxVerbatim-1 tokens
