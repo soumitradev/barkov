@@ -64,6 +64,15 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			return nil, bwdErr
 		}
 		if len(fwd) <= len(seed) {
+			if gc.seedEnding && !forwardOnly && bwdErr == nil && len(bwd) > len(seed) {
+				slices.Reverse(bwd)
+				err := g.validateJoined(bwd, gc)
+				if err == nil {
+					return g.vocab.DecodeTokens(bwd), nil
+				}
+				lastErr = err
+				continue // retry the pair; one rejection must not end seed endings
+			}
 			lastErr = fmt.Errorf("barkov: no forward continuation after the seed: %w", barkov.ErrSentenceFailedValidation)
 			forwardOnly = true
 			continue
@@ -73,8 +82,13 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			spliced := make([]interned.TokenID, 0, len(bwd)-len(seed)+len(fwd))
 			spliced = append(spliced, bwd[:len(bwd)-len(seed)]...)
 			spliced = append(spliced, fwd...)
-			if err := g.validateResult(spliced, gc.maxTokens); err == nil {
+			err := g.validateJoined(spliced, gc)
+			if err == nil {
 				return g.vocab.DecodeTokens(spliced), nil
+			}
+			if gc.spliceCheck {
+				lastErr = err
+				continue // resample both halves rather than keep only one
 			}
 		}
 		// Validate the complete result, never the temporary or reversed halves.
@@ -104,6 +118,18 @@ func (g *Generator) middleOptions(chain interned.BackoffChain, seed, contextSeed
 	}
 	copy(state[len(state)-len(known):], known)
 	return []barkov.GenOption[interned.TokenID]{barkov.WithSeed(seed), barkov.WithInitialState(state), barkov.WithMaxTokens[interned.TokenID](gc.maxTokens), barkov.WithParallelism[interned.TokenID](gc.threads)}, nil
+}
+
+// validateJoined validates an assembled middle-out output, including copied
+// runs across the seed when splice validation is on.
+func (g *Generator) validateJoined(out []interned.TokenID, gc *genConfig) error {
+	if err := g.validateResult(out, gc.maxTokens); err != nil {
+		return err
+	}
+	if gc.spliceCheck && g.chain.CopiesRun(out) {
+		return fmt.Errorf("barkov: joined output copies a corpus run across the seed: %w", barkov.ErrSentenceFailedValidation)
+	}
+	return nil
 }
 
 func (g *Generator) validateResult(out []interned.TokenID, limit int) error {

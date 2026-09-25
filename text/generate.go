@@ -29,6 +29,7 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 		defer cancel()
 	}
 
+	g = g.withWalk(&gc)
 	out, err := g.generate(ctx, &gc)
 	if err == nil || !gc.verbatimFallback || g.messages == nil || !errors.Is(err, barkov.ErrSentenceFailedValidation) {
 		return out, err
@@ -43,6 +44,27 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 	}
 	fallback.messages = nil
 	return fallback.generate(ctx, &gc)
+}
+
+// withWalk returns g, or a copy walking views of its chains for per-call
+// walk options. The model tables are shared, never modified.
+func (g *Generator) withWalk(gc *genConfig) *Generator {
+	if gc.escape <= 0 && !gc.noSteering {
+		return g
+	}
+	view := *g
+	for _, chain := range []*interned.BackoffChain{&view.chain, &view.reverseChain} {
+		if *chain == nil {
+			continue
+		}
+		if gc.noSteering {
+			*chain = (*chain).WithoutVerbatim()
+		}
+		if gc.escape > 0 {
+			*chain = (*chain).WithEscape(gc.escape)
+		}
+	}
+	return &view
 }
 
 func (g *Generator) generate(ctx context.Context, gc *genConfig) ([]string, error) {

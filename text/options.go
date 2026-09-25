@@ -107,6 +107,10 @@ type genConfig struct {
 	generationConfig
 	seed, seedMiddle []string
 	verbatimFallback bool
+	escape           float64
+	noSteering       bool
+	seedEnding       bool
+	spliceCheck      bool
 }
 
 type generationConfig struct {
@@ -178,4 +182,36 @@ func WithThreads(n int) GenOption {
 // It does not change the model or other concurrent calls.
 func WithVerbatimFallback() GenOption {
 	return func(gc *genConfig) { gc.verbatimFallback = true }
+}
+
+// WithEscape interpolates across context orders instead of always using the
+// longest one: at each step the walk moves to the next shorter context with
+// probability scale·T/(N+T), where T counts the context's distinct followers
+// and N its observations (PPM method C). Recombination then happens where the
+// corpus branches, including early in a message, and every transition is
+// still observed. Start padding counts once, and MinOrder still applies.
+// scale 0 keeps longest-context sampling.
+func WithEscape(scale float64) GenOption {
+	return func(gc *genConfig) { gc.escape = scale }
+}
+
+// WithoutCopySteering stops steering the walk away from verbatim n-grams
+// while still rejecting outputs that repeat a whole corpus message.
+func WithoutCopySteering() GenOption {
+	return func(gc *genConfig) { gc.noSteering = true }
+}
+
+// WithSeedEnding lets SeedMiddle output end on the seed: when the forward
+// walk stops right after the seed, a valid backward completion is kept
+// instead of being discarded.
+func WithSeedEnding() GenOption {
+	return func(gc *genConfig) { gc.seedEnding = true }
+}
+
+// WithSpliceValidation makes SeedMiddle reject a joined output that contains
+// a copied run as long as the copy-steering window (which can form across the
+// seed, where neither half's steering looks) and resample both halves,
+// instead of falling back to the forward half alone.
+func WithSpliceValidation() GenOption {
+	return func(gc *genConfig) { gc.spliceCheck = true }
 }
