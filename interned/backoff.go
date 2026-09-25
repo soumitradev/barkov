@@ -41,6 +41,14 @@ type BackoffChain interface {
 	SeedContext(seed []TokenID) ([]TokenID, error)
 	// WithoutVerbatim returns a view sharing the same immutable model tables.
 	WithoutVerbatim() BackoffChain
+	// CopiesRun reports whether tokens contain a corpus n-gram as long as
+	// the copy-steering window, i.e. a run that steering would have
+	// prevented inside one walk. False when steering is disabled.
+	CopiesRun(tokens []TokenID) bool
+	// WithEscape returns a view sharing the same tables whose walk
+	// interpolates across context orders instead of always using the
+	// longest one (see backoffCore.escape). scale 0 restores the default.
+	WithEscape(scale float64) BackoffChain
 }
 
 // withDefaults validates cfg and fills zero values with defaults. Panics
@@ -131,6 +139,14 @@ type backoffCore struct {
 	encoder   PackedEncoder
 	rng       *rand.Rand
 	contexts  *contextIndex
+	// escape > 0 turns "longest context wins" into interpolated backoff:
+	// at each usable order above MinOrder the walk leaves for the next
+	// shorter context with probability escape·T/(N+T) (PPM method C),
+	// where T is the context's distinct followers and N its observations.
+	// Sampling the escape chain this way draws exactly from the mixture
+	// (1-ε)·ML(h) + ε·Q(suffix(h)), and every emitted transition is still
+	// observed at the order it came from.
+	escape float64
 }
 
 // SetRNG overrides the random source used by the walk. Intended for
@@ -182,6 +198,9 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 	// orderTable interface call, so escape analysis can't stack it, and
 	// order-1 contexts on common tokens have thousands of candidates.
 	var probeBuf [8]TokenID
+	if b.escape > 0 {
+		return b.moveEscape(window, sv, &probeBuf)
+	}
 	sawState, sawSupported := false, false
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
 		tail := window[len(window)-m:]
@@ -210,6 +229,109 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 	}
 	return zero, fmt.Errorf("barkov: no observed context at orders %d..%d: %w",
 		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
+}
+
+// escapeDraws bounds the rejection loop of moveEscape. A step whose legal
+// mass is too small to be hit within this many draws fails like a step
+// whose every continuation is forbidden, and the sentence is retried.
+const escapeDraws = 256
+
+// moveEscape samples the interpolated mixture over context orders exactly,
+// conditioned on copy steering: draw the escape chain and a follower from
+// the unfiltered mixture, and if steering forbids that follower, restart the
+// whole draw. Filtering each order separately would renormalise orders
+// independently and skew the mixture (an order left with only END would
+// hand END that order's entire weight).
+//
+// Orders whose context starts with two Begins repeat the shorter
+// message-start context and are skipped, so start padding counts once. When
+// every usable order escapes, the shortest usable one is sampled.
+func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, error) {
+	sawState, sawSupported := false, false
+	for range escapeDraws {
+		lastM, last := 0, barkov.ChoicesIndex{}
+		picked := false
+		var tok TokenID
+		for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
+			tail := window[len(window)-m:]
+			if m > b.cfg.MinOrder && tail[0] == b.sentinels.Begin && tail[1] == b.sentinels.Begin {
+				continue
+			}
+			idx, ok := b.tables[m-1].lookupTail(tail)
+			if !ok {
+				continue
+			}
+			sawState = true
+			if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
+				continue
+			}
+			sawSupported = true
+			lastM, last = m, idx
+			if m > b.cfg.MinOrder && b.escapes(m, idx) {
+				continue
+			}
+			tok, picked = b.follower(m, idx), true
+			break
+		}
+		if !sawSupported {
+			break
+		}
+		if !picked {
+			tok = b.follower(lastM, last)
+		}
+		if sv.mode == steerOff || !b.filtered(sv, window, tok, probeBuf) {
+			return tok, nil
+		}
+	}
+	var zero TokenID
+	if sawSupported {
+		return zero, fmt.Errorf("barkov: no continuation outside a verbatim run was drawn: %w", barkov.ErrSentenceFailedValidation)
+	}
+	if sawState {
+		return zero, fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
+			b.cfg.MinOrder, b.cfg.MaxOrder, b.cfg.MinSupport, barkov.ErrInsufficientSupport)
+	}
+	return zero, fmt.Errorf("barkov: no observed context at orders %d..%d: %w",
+		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
+}
+
+// follower draws one follower of the order-m state idx, unfiltered.
+func (b *backoffCore) follower(m int, idx barkov.ChoicesIndex) TokenID {
+	if idx.Count == 1 {
+		return TokenID(idx.Offset)
+	}
+	choices, cum := b.tables[m-1].slices(idx)
+	return choices[b.draw(cum)]
+}
+
+// CopiesRun implements BackoffChain.
+func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
+	r := b.cfg.MaxVerbatim
+	if r <= 0 {
+		return false
+	}
+	for i := 0; i+r <= len(tokens); i++ {
+		if _, ok := b.tables[r-1].lookupTail(tokens[i : i+r]); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// escapes draws whether the walk leaves the order-m context idx for a
+// shorter one: probability escape·T/(N+T), capped at 1.
+func (b *backoffCore) escapes(m int, idx barkov.ChoicesIndex) bool {
+	t := float64(idx.Count)
+	n := float64(idx.Obs)
+	if idx.Count > 1 {
+		_, cum := b.tables[m-1].slices(idx)
+		n = float64(cum[len(cum)-1])
+	}
+	p := b.escape * t / (n + t)
+	if b.rng != nil {
+		return b.rng.Float64() < p
+	}
+	return rand.Float64() < p
 }
 
 // runLongEnough reports whether the window's last MaxVerbatim-1 tokens

@@ -100,5 +100,14 @@ func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 func (b *backoffCore) WithoutVerbatim() BackoffChain {
 	cfg := b.cfg
 	cfg.MaxVerbatim = -1
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts})
+	return wrapBackoff(&backoffCore{tables: b.tables, cfg: cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts, escape: b.escape})
+}
+
+// WithEscape shares immutable tables with the original chain while
+// interpolating across context orders; see backoffCore.escape.
+func (b *backoffCore) WithEscape(scale float64) BackoffChain {
+	if scale < 0 {
+		scale = 0
+	}
+	return wrapBackoff(&backoffCore{tables: b.tables, cfg: b.cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts, escape: scale})
 }
