@@ -111,6 +111,7 @@ type genConfig struct {
 	noSteering       bool
 	seedEnding       bool
 	spliceCheck      bool
+	noFragments      bool
 }
 
 type generationConfig struct {
@@ -214,4 +215,11 @@ func WithSeedEnding() GenOption {
 // instead of falling back to the forward half alone.
 func WithSpliceValidation() GenOption {
 	return func(gc *genConfig) { gc.spliceCheck = true }
+}
+
+// WithoutFragments rejects outputs that are an unbroken piece of one corpus
+// message, not only whole messages: every output must recombine at least
+// once. Checked exactly for outputs up to the model's longest context.
+func WithoutFragments() GenOption {
+	return func(gc *genConfig) { gc.noFragments = true }
 }

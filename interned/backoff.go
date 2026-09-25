@@ -45,6 +45,10 @@ type BackoffChain interface {
 	// the copy-steering window, i.e. a run that steering would have
 	// prevented inside one walk. False when steering is disabled.
 	CopiesRun(tokens []TokenID) bool
+	// IsFragment reports whether tokens occur contiguously inside one
+	// corpus message. Exact for up to MaxOrder tokens; longer runs are
+	// what copy steering prevents.
+	IsFragment(tokens []TokenID) bool
 	// WithEscape returns a view sharing the same tables whose walk
 	// interpolates across context orders instead of always using the
 	// longest one (see backoffCore.escape). scale 0 restores the default.
@@ -339,6 +343,17 @@ func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
 		}
 	}
 	return false
+}
+
+// IsFragment implements BackoffChain. Every run of up to MaxOrder tokens
+// inside a message is the context before its next token (or END), so the
+// run is a key of the table of its own length.
+func (b *backoffCore) IsFragment(tokens []TokenID) bool {
+	if len(tokens) == 0 || len(tokens) > b.cfg.MaxOrder {
+		return false
+	}
+	_, ok := b.tables[len(tokens)-1].lookupTail(tokens)
+	return ok
 }
 
 // escapeProbability is escape·T/(N+T) for the order-m state idx, capped at 1.

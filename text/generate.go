@@ -76,6 +76,12 @@ func (g *Generator) generate(ctx context.Context, gc *genConfig) ([]string, erro
 
 func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []interned.TokenID) ([]string, error) {
 	genOpts := g.genOptions(seed, gc.maxTokens, gc.threads)
+	if gc.noFragments {
+		whole := g.messages.NotWholeMessage()
+		genOpts = append(genOpts, barkov.WithOutputValidator(func(out []interned.TokenID) bool {
+			return whole(out) && !g.chain.IsFragment(out)
+		}))
+	}
 
 	var lastErr error
 	for attempt := 0; attempt < gc.retries; attempt++ {

@@ -93,7 +93,7 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 		}
 		// Validate the complete result, never the temporary or reversed halves.
 		// A rejected splice can still leave a useful forward-only response.
-		lastErr = g.validateResult(fwd, gc.maxTokens)
+		lastErr = g.validateJoined(fwd, gc)
 		if lastErr == nil {
 			return g.vocab.DecodeTokens(fwd), nil
 		}
@@ -125,6 +125,9 @@ func (g *Generator) middleOptions(chain interned.BackoffChain, seed, contextSeed
 func (g *Generator) validateJoined(out []interned.TokenID, gc *genConfig) error {
 	if err := g.validateResult(out, gc.maxTokens); err != nil {
 		return err
+	}
+	if gc.noFragments && g.chain.IsFragment(out) {
+		return fmt.Errorf("barkov: output is a piece of one corpus message: %w", barkov.ErrSentenceFailedValidation)
 	}
 	if gc.spliceCheck && g.chain.CopiesRun(out) {
 		return fmt.Errorf("barkov: joined output copies a corpus run across the seed: %w", barkov.ErrSentenceFailedValidation)
