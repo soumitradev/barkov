@@ -140,9 +140,19 @@ func ReadModelSnapshot(r io.Reader) (ModelSnapshot, error) {
 		return s, d.err
 	}
 	s.Vocabulary = v
-	s.Forward = readBackoff(&d, cfg, n)
-	if reverse != 0 {
-		s.Reverse = readBackoff(&d, cfg, n)
+	var sections *sectionReader
+	var forward, backward *backoffCore
+	if d.remaining >= 0 {
+		sections = newSectionReader(&d)
+		forward = sections.readBackoffSections(cfg, n)
+		if reverse != 0 && d.err == nil {
+			backward = sections.readBackoffSections(cfg, n)
+		}
+	} else {
+		s.Forward = readBackoff(&d, cfg, n)
+		if reverse != 0 {
+			s.Reverse = readBackoff(&d, cfg, n)
+		}
 	}
 	count := d.u32()
 	if cfg.MaxVerbatim < 0 && count != 0 {
@@ -165,6 +175,18 @@ func ReadModelSnapshot(r io.Reader) (ModelSnapshot, error) {
 	d.hash = nil
 	if want := d.u32(); d.err == nil && checksum != want {
 		d.fail("checksum mismatch")
+	}
+	if sections != nil {
+		// A section that failed to decode comes before anything read after it.
+		if err := sections.wait(); err != nil {
+			return ModelSnapshot{}, err
+		}
+		if d.err == nil {
+			s.Forward = wrapBackoff(forward)
+			if backward != nil {
+				s.Reverse = wrapBackoff(backward)
+			}
+		}
 	}
 	if d.err != nil {
 		return ModelSnapshot{}, d.err

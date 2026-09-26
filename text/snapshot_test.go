@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"reflect"
@@ -96,7 +97,7 @@ func TestSnapshotRetainsCopyChecksAndFallback(t *testing.T) {
 	if _, err := g.Generate(context.Background()); err == nil {
 		t.Fatal("copy checks disappeared")
 	}
-	out, err := g.Generate(context.Background(), SeedMiddle([]string{"two"}), WithVerbatimFallback())
+	out, err := g.Generate(context.Background(), SeedMiddle([]string{"quick"}), WithVerbatimFallback())
 	if err != nil || !strings.Contains(strings.Join(out, " "), "two three") {
 		t.Fatalf("fallback or middle seed lost: %v %v", out, err)
 	}
@@ -199,4 +200,27 @@ func FuzzLoadSnapshot(f *testing.F) {
 			_, _ = g.Generate(context.Background(), WithTimeout(time.Millisecond), WithRetries(1), WithMaxTokens(10))
 		}
 	})
+}
+
+// Sized inputs restore tables in parallel; streams of unknown length are
+// read sequentially. Both must accept and reject the same bytes.
+func TestParallelRestoreMatchesSequential(t *testing.T) {
+	_, data := saveFixture(t, Bidirectional())
+	generate := func(g *Generator) string {
+		g.SetRNG(rand.New(rand.NewPCG(5, 6)))
+		out, err := g.Generate(context.Background(), SeedMiddle([]string{"quick"}), WithRetries(4))
+		return fmt.Sprint(out, err)
+	}
+	for offset := range len(data) {
+		corrupt := bytes.Clone(data)
+		corrupt[offset] ^= 0x10
+		parallel, perr := Load(bytes.NewReader(corrupt))
+		sequential, serr := Load(struct{ io.Reader }{bytes.NewReader(corrupt)})
+		if (perr == nil) != (serr == nil) {
+			t.Fatalf("offset %d: parallel err %v, sequential err %v", offset, perr, serr)
+		}
+		if perr == nil && generate(parallel) != generate(sequential) {
+			t.Fatalf("offset %d: restored generators differ", offset)
+		}
+	}
 }
