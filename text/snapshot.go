@@ -70,3 +70,18 @@ func Load(r io.Reader) (*Generator, error) {
 	}
 	return &Generator{chain: s.Forward, reverseChain: s.Reverse, vocab: s.Vocabulary, messages: s.Messages, defaults: defaults, minOrder: minOrder, unknownContext: interned.TokenID(s.Vocabulary.Size())}, nil
 }
+
+// Compact shrinks a freshly trained generator's tables to what loading its
+// snapshot builds, reducing memory without changing generation. Call it
+// before sharing the generator; it must not run concurrently with other use.
+func (g *Generator) Compact() error {
+	for _, chain := range []interned.BackoffChain{g.chain, g.reverseChain} {
+		if chain == nil {
+			continue
+		}
+		if err := interned.Compact(chain); err != nil {
+			return err
+		}
+	}
+	return nil
+}
