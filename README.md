@@ -10,161 +10,110 @@ Requires Go 1.25 or newer.
 go get github.com/soumitradev/barkov/v2
 ```
 
-This README describes the API on this branch. For local development against a checkout containing changes that haven't been tagged yet:
-
-```bash
-go mod edit -replace github.com/soumitradev/barkov/v2=../barkov
-```
-
 ## Usage
 
-Barkov doesn't implement a tokenizer, you pick your own tokenizer and pass barkov a slice of tokens. Each inner slice is one message or sentence; training doesn't link the end of one to the start of the next.
-
-Import `github.com/soumitradev/barkov/v2/text`. These snippets assume `corpus` is your `[][]string` and `ctx` is a `context.Context`:
+Barkov doesn't implement a tokenizer, you pick/write your own tokenizer and pass barkov a slice of tokens. Each inner slice is one message or sentence.
 
 ```go
+import "github.com/soumitradev/barkov/v2/text"
+
+// corpus is a 2D slice of tokens: [][]string
 gen, err := text.New(corpus)
 if err != nil {
     return err
 }
-sentence, err := gen.Sentence(ctx)
+tokens, err := gen.Generate(ctx)   // a new output as []string
+sentence, err := gen.Sentence(ctx) // another one, joined with spaces
 ```
 
-`Sentence` returns a string joined with spaces. `Generate` returns the `[]string` tokens so you can join them however you want. Check the generation error too: a corpus can build successfully without having an acceptable continuation for a particular seed.
+- `text.New` builds a markov chain model with some sensible defaults (variable-order, steers away from copying source text, never returns a whole message from the corpus).
+- `Generate` returns the tokens as `[]string`. `Sentence` is syntax sugar for `Generate` + `strings.Join(tokens, " ")`.
 
-`text.New` builds a variable-order markov chain and steers generation away from verbatim corpus runs. It also rejects outputs that exactly reproduce a complete corpus message. The rest of this README is for when you need more control. There's a complete runnable program in [examples/text](examples/text/main.go).
+The rest of this README is for when you need more control.
 
-Options, if you need them:
+Options:
 
 ```go
 gen, err := text.New(corpus,
-    text.Order(4),               // context scale, 2-8 (default 4)
-    text.Timeout(5*time.Second), // budget for the whole Generate call
-    text.MaxTokens(30),          // includes seed tokens; longer attempts are rejected
-    text.Bidirectional(),        // also build a reverse chain for SeedMiddle
+    text.Order(4),               // markov model order, 2-8 (default 4)
+    text.Timeout(5*time.Second), // per-call budget (default 10s)
+    text.MaxTokens(30),          // includes the seed; longer attempts are rejected
+    text.Threads(8),             // parallel attempts (default sequential)
 )
 if err != nil {
     return err
 }
-out, err := gen.Generate(ctx, text.Seed([]string{"the", "quick"}))
+out, err := gen.Generate(ctx,
+    text.Seed([]string{"once", "upon"}), // start with these words
+    text.WithTimeout(time.Second),       // With* options override the defaults for this call only
+)
 ```
 
-`Seed` starts from the supplied words. `SeedMiddle` grows around them, using the reverse chain as well:
+`Order(4)` looks back up to six tokens. Seed words the corpus has never seen are dropped.
+
+Full program: [examples/text](examples/text/main.go). Godoc has the rest of the options, including middle-out seeds.
+
+### Less copying
+
+If your outputs are directly copying source text:
 
 ```go
 out, err := gen.Generate(ctx,
-    text.SeedMiddle([]string{"brown", "fox"}),
-    text.WithMaxTokens(20),
-    text.WithTimeout(2*time.Second),
-    text.WithRetries(32),
-    text.WithThreads(2),
+    text.WithEscape(1),      // try shorter contexts more often, so it branches sooner
+    text.WithoutFragments(), // also reject short outputs lifted from inside a message
 )
 ```
 
-Seed lookup tries each word exactly, then lowercased. Unknown words are dropped; if none remain, generation is unseeded. `Seed` treats the input as a sentence start. `SeedMiddle` requires `Bidirectional()` and uses observed corpus context for seeds shorter than `MinOrder`, weighted by observations and filtered by `MinSupport`. This supplies missing history without lowering the context floor. Other missing history stays unknown, rather than being treated as a sentence boundary.
+On the other hand, `WithoutCopySteering()` lets it copy chunks of the source content but still never returns a verbatim source sentence.
 
-`SeedMiddle` requires at least one new word after the seed. It validates the completed output, rather than its temporary or reversed halves. If the reverse half cannot be used, or the combined output fails validation, it can return a valid forward half. Backward-only candidates use the remaining attempts for forward-only generation. Exhaustion returns an error, never backward-only text or a seed-only echo.
-
-Pass `text.WithVerbatimFallback()` to retry exhausted validation failures with copy prevention disabled. This second phase gets the same retry limit and shares the original timeout; all other constraints still apply. For a long seed that keeps ending immediately, this phase can restart from its shortest permitted context while still emitting the entire seed. It shares model tables without changing the generator or concurrent calls. Without this option, copy prevention stays strict.
-
-The construction options and their defaults:
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `Order(n)` | `4` | Context scale `2..8`; the longest context is `min(n+2, 8)`, so `Order(4)` looks back up to six tokens |
-| `MinOrder(n)` | `1` | Shortest allowed context in tokens, `1..min(Order+2, 8)`; generation fails rather than falling below it |
-| `MinSupport(n)` | `1` | Minimum observations required at every allowed order, `1..65535`; independent of context length |
-| `AntiVerbatim(n)` | Longest context | Steering rejects continuations completing a corpus n-gram; positive widths are clamped to `2..min(Order+2, 8)`. `0` disables steering and whole-message rejection |
-| `MaxTokens(n)` | `0` | Maximum output length, including the seed; `0` means unlimited |
-| `Timeout(d)` | `10*time.Second` | Budget across all retries in one call; `0` adds no timeout, but the caller's context still applies |
-| `Retries(n)` | `64` | Maximum attempts; must be at least one |
-| `Threads(n)` | `0` | Workers per attempt; `0` and `1` are sequential |
-| `Bidirectional()` | Off | Build a reverse chain for middle-out generation |
-| `RNG(r)` | Package RNG | Supply a `*rand.Rand` from `math/rand/v2` for reproducible sequential generation |
-
-`WithMaxTokens`, `WithTimeout`, `WithRetries`, and `WithThreads` override those defaults for one call. `WithVerbatimFallback` adds the bounded fallback phase described above. Negative lengths, timeouts, or worker counts return errors, as do zero or negative retry budgets. Length limits reject an attempt; they don't truncate the result. Parallelism multiplies attempts, so `Retries(32)` with `Threads(2)` can start up to 64 forward walks, or up to twice that with both directions.
-
-Without an RNG override, generators support concurrent `Generate` and `Sentence` calls. A fixed RNG must not be shared between concurrent calls, and `Threads` greater than one is rejected with it. Middle-out generation uses that RNG sequentially too. `gen.SetRNG(r)` replaces the source; `gen.SetRNG(nil)` restores the default. Change the RNG only when generation is idle.
+You can run validators if you're using some other way to modify sentences:
+```go
+out[2] = "cat" // swap a word
+if err := gen.Validate(out); err != nil {
+    // the edit made it too long, or it now copies the corpus
+}
+```
 
 ## Saving and loading
 
-Save a trained `text.Generator` with `gen.Save(io.Writer)` and restore it with `text.Load(io.Reader)`. Loading restores the trained tables and seed indexes directly; it does not need the corpus or retrain the model.
+You can save a model to an `io.Writer`, then load it from an `io.Reader`. This avoids having to build models from corpus every time:
 
 ```go
-f, err := os.OpenFile("model.barkov", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-if err != nil {
-    return err
-}
-if err := gen.Save(f); err != nil {
-    f.Close()
-    return err
-}
-if err := f.Close(); err != nil {
+// w is any io.Writer, e.g. an *os.File
+if err := gen.Save(w); err != nil {
     return err
 }
 
-f, err = os.Open("model.barkov")
-if err != nil {
-    return err
-}
-defer f.Close()
-restored, err := text.Load(f)
+// later, r is any io.Reader
+restored, err := text.Load(r)
 if err != nil {
     return err
 }
 ```
 
-Snapshots preserve the vocabulary, forward and reverse chains, observation weights, copy checks and generation defaults. RNG state is excluded: a restored generator uses the concurrency-safe default RNG. Call `restored.SetRNG(...)` if you need reproducible generation. Saving can run alongside generation, provided the model and vocabulary are not mutated.
-
-The format is versioned and checksummed. Load rejects unknown versions, damaged files, invalid table data and trailing bytes. Files must be loaded on a machine with the same native byte order because whole-message digests depend on it. Keep the corpus as the source for rebuilding incompatible snapshots. Files and sized readers support direct table restoration; other streams grow their tables incrementally.
-
-The caller owns file lifetimes and replacement policy. For an existing snapshot, write to a temporary file in the same directory, sync and close it, then rename it and sync the directory. This prevents an interrupted save from damaging the previous file. Snapshots represent the saved build and do not automatically include later corpus changes.
-
-For an interned backoff model outside `text`, `interned.ModelSnapshot` groups `Vocabulary`, `Forward`, optional `Reverse` and `Messages`; its `WriteTo` method pairs with `interned.ReadModelSnapshot`. Both directions must share the vocabulary and backoff configuration.
-
-Benchmark training, disk saving (including sync) and warm-file loading on the bundled public corpus with:
-
-```sh
-go test ./text -run '^$' -bench '^BenchmarkModelSnapshot$' -benchmem
-```
+This is generally more memory efficient, and so if you build the model from corpus every time, you can call `gen.Compact()` once after you build the model to achieve the same result.
 
 ## Why
 
 Markovify was slow, and it didn't give me control over tokenization or validation without overriding its classes. Plus I feel like the memory layout was very bloated and I didn't want to use Python either. So this library stays barebones about both: tokenize your text however you want, validate a sentence however you see fit. If you don't want the chain struct either, fine, there's a `GenerativeChain` interface to satisfy.
 
-Not in scope: tokenization (you bring the tokens), combining models.
-
 ## The core API
 
-The `text` package handles construction, retry budgets, and string conversion. Use the core package for custom token types, validators, or direct chain access.
+`text` has the more general purpose API. You can use the core `v2` interfaces when you want a custom token type, your own validator, or direct access to the chain.
 
-Strings, no extras:
+Example of using the core API:
 
 ```go
 chain := barkov.InitChain(4).BuildCompressed(corpus)
 out, err := barkov.Gen(ctx, chain, barkov.WithMaxTokens[string](30))
 ```
 
-`InitChain(4)` uses a fixed four-token context. `BuildRaw(corpus)` gives you the mutable model for inspection or pruning; `BuildCompressed(corpus)` builds the compact representation directly. To prune before compressing:
-
-```go
-raw := barkov.InitChain(4).BuildRaw(corpus)
-raw.Prune(2)
-if err := raw.Validate(); err != nil {
-    return err
-}
-chain := raw.Compress()
-out, err := barkov.Gen(ctx, chain)
-```
-
-Pruning can remove the begin state, so successful validation doesn't guarantee generation will succeed. The default string encoder uses `barkov.SEP` between tokens; keep it and the `BEGIN`/`END` sentinels out of your actual tokens.
-
 The same thing with tokens interned to integer IDs first (less memory, faster builds on large corpora):
 
 ```go
 vocab := interned.NewVocabulary()
 encoded := vocab.InternCorpus(corpus)
-chain := interned.Build(4, encoded) // fixed stateSize 1-8
+chain := interned.Build(4, encoded) // stateSize 1-8
 ids, err := barkov.Gen(ctx, chain)
 if err != nil {
     return err
@@ -172,100 +121,64 @@ if err != nil {
 out := vocab.DecodeTokens(ids)
 ```
 
-And the engine `text` uses, exposed directly:
+The engine `text` uses by default is a variable-order chain that backs off to shorter contexts where the corpus doesn't have many branches and steers around verbatim reproductions while it walks.
+
+Why not a fixed-order chain? I've noticed that on real text many states have exactly one continuation, so the output ends up being verbatim source text every now and then. By using this variable order, backoff tries the longest context with enough branches, then uses a smaller order when there aren't enough branches from that state.
 
 ```go
-chain := interned.BuildBackoff(interned.BackoffConfig{
-    MaxOrder:    6, // longest context, 2-8; default 6
-    MinOrder:    1, // shortest allowed context; default 1
-    MinSupport:  1, // minimum observations, independently of context length
-    MaxVerbatim: 6, // block copied six-token spans; -1 disables steering
-}, encoded)
+chain := interned.BuildBackoff(interned.BackoffConfig{}, encoded) // zero value = defaults
 ids, err := barkov.Gen(ctx, chain)
 ```
 
-`BackoffConfig{}` selects those defaults. `MinOrder` accepts `1..MaxOrder` (`0` selects `1`); the floor applies both to sparse contexts and copy-prevention fallback. Begin-of-message padding still supplies context at startup. A higher floor can leave seeds or attempts without any supported continuation. Lower-order tables remain available for copy detection and state inspection. `MinSupport` accepts `1..65535` and applies even at `MinOrder`; its default is now `1` rather than the previous hidden `3`. Higher values reject rare contexts and may exhaust the permitted orders; `MaxVerbatim` accepts `2..MaxOrder`, with `0` selecting `MaxOrder`. `Build` and `BuildBackoff` panic on out-of-range configuration. The higher-level `text.New` returns configuration errors instead. Unlike `text`, direct `BuildBackoff` doesn't install the whole-message validator or retry rejected attempts for you.
+Unlike `text`, core `Gen` makes one attempt, has no timeout besides your context, and doesn't reject whole messages. `GenIter` does the same but streams tokens as they arrive.
 
-Why not always run a fixed-order chain? On real text many states have exactly one continuation, so the walk replays the corpus verbatim with a random branch every once in a while. Backoff tries the longest context with enough observations and an allowed continuation, falling back to shorter contexts where the corpus is thin or steering excludes every candidate.
-
-For a custom comparable token type, implement `StateEncoder[T]` and pass it with the state size and sentinels to `barkov.NewChain(barkov.ChainConfig[T]{...})`. `AppendEncoder[T]` optionally lets builders and validators reuse encoding buffers. See [examples/custom](examples/custom/main.go).
-
-### Streaming and errors
-
-`Gen` returns `([]T, error)`. `GenIter` exposes an `iter.Seq2[T, error]`:
-
-```go
-for token, err := range barkov.GenIter(ctx, chain) {
-    if err != nil {
-        return err
-    }
-    fmt.Println(token)
-}
-```
-
-Core generation makes one attempt by default. `WithSeed`, `WithMaxTokens`, and the validator options work with both calls. There is no built-in core timeout; pass a context with a deadline. Cancellation is checked between tokens, including seeds and buffered results.
-
-`barkov.WithInitialState` separates the first lookup state from the emitted `WithSeed` tokens; initialization history is not included in the output or its token limit.
-
-`Gen` discards partial output on failure. `GenIter` can already have yielded a prefix when a later step fails, so keep that in mind when writing directly to an output stream. Whole-output validation and parallel generation buffer the candidate before yielding it.
-
-Use `errors.Is` with `barkov.ErrSentenceFailedValidation` for rejected or over-length attempts, `barkov.ErrInsufficientSupport` for observed contexts below the support threshold, `barkov.ErrStateNotFound` for an unavailable state, and `context.Canceled` / `context.DeadlineExceeded` for cancellation. `text.Generate` retries validation, length and support failures up to its configured budget; it returns other errors immediately.
+For a custom token type, implement `StateEncoder[T]` (and `AppendEncoder[T]` to reuse encoding buffers) and pass it to `barkov.NewChain(barkov.ChainConfig[T]{...})`. See [examples/custom](examples/custom/main.go). You can find more details about all this in `examples/`.
 
 ## Validators
 
-A validator is any `func([]T) bool`. Install a sliding-window check with `barkov.WithValidator`; `false` ends that attempt with `ErrSentenceFailedValidation`. Core `Gen` doesn't automatically retry it.
-
-Two footguns, and the options that remove them:
-
-- `WithValidator` slides a `StateSize+2` window regardless of what your validator expects. If the validator knows its own width (`NGramSet`, `nhash.HashNGramSet`), use `WithNGramValidator` instead, and `Gen` slides exactly `v.N()` tokens. The width must be positive
-- The sliding window never sees outputs shorter than itself. `WithOutputValidator` checks the complete candidate, including the seed, after the walk succeeds
+A validator is any `func([]T) bool`. `Gen` calls it on a sliding window as the chain walks. `false` fails the attempt with `ErrSentenceFailedValidation`. This essentially allows you to set any arbitrary validation rule for your markov walk.
 
 ```go
-chain := barkov.InitChain(4).BuildCompressed(corpus)
+noSwears := func(window []string) bool { return !slices.Contains(window, "heck") }
 set := barkov.NewNGramSet(corpus, 6, barkov.DefaultStringEncoder)
+
 out, err := barkov.Gen(ctx, chain,
-    barkov.WithNGramValidator(set),
-    barkov.WithOutputValidator(func(tokens []string) bool {
-        return len(tokens) >= 5
+    barkov.WithValidator(noSwears), // slides a StateSize+2 window
+    barkov.WithNGramValidator(set), // slides exactly 6 tokens, the set's width
+    barkov.WithOutputValidator(func(out []string) bool {
+        return len(out) >= 5 // runs once on the whole output
     }),
-    barkov.WithMaxTokens[string](30),
-    barkov.WithParallelism[string](4),
 )
 ```
 
-Here each of four workers tries a candidate and applies both validators. The first accepted candidate wins. Workers are canceled and joined before the call returns; custom chains and callbacks must return promptly for that to finish. `WithThreaded[T]()` is shorthand for `runtime.NumCPU()*8` workers; `WithParallelism[T](n)` lets you choose a smaller bound. Benchmark whether parallel attempts help your corpus and validation rules.
+Two footguns, and the options that remove them:
 
-The stock anti-verbatim validators are `NGramSet` (stores complete encoded n-grams) and `nhash.HashNGramSet` (stores 64-bit digests). Hash collisions can reject a new n-gram; that probability grows with the set size. `nhash.New(corpus, n, encoder, hasher)` takes an explicit `hashers.Hasher`: `xxh3.XXH3{}`, `xxhash64.XXHash64{}`, or the zero-dependency `fnv.FNV{}`. See [examples/validators](examples/validators/main.go).
+- `WithValidator` by default uses a `StateSize+2` sliding window regardless of what your validator expects. If the validator knows its own width (`NGramSet`, `nhash.HashNGramSet`), use `WithNGramValidator` instead, and `Gen` slides exactly `v.N()` tokens.
+- The sliding window never sees outputs shorter than itself. `WithOutputValidator` runs once on the complete output and catches those.
 
-Backoff steering at width `r` prevents newly generated corpus spans of length `r` or longer; stricter checks on shorter spans still need a validator. Sliding checks don't independently validate an already-supplied seed; use a whole-output validator when you need that guarantee. `interned.NewMessageSet(encoded).NotWholeMessage()` supplies the whole-message rejection used by `text`.
+`NGramSet` is the stock anti-verbatim validator. `nhash.HashNGramSet` does the same job with 64-bit digests, so it uses less memory but a hash collision can occasionally reject a new n-gram. You don't need either on the backoff engine, since it already steers around copied runs.
+
+Validators are not really for steering, it's more for validation when an error is maybe expected: e.g. profanity filters, length caps, POS patterns, etc.
+
+More in [examples/validators](examples/validators/main.go), including picking a hasher and running attempts in parallel.
 
 ## Escape hatches
 
-If you don't like a util we write you can plug in your own. `StateEncoder[T]` for state keys, `hashers.Hasher` for digests, `StuckDetector` for failed-seed tracking, `SlicePool[T]` for allocation reuse, `GenerativeChain[T]` for the chain itself. Compressed and interned chains expose `barkov.RNGSettable` (`SetRNG`); interned chains also expose `barkov.FastMoverKey[K, T]` (`MoveKey`).
-
-`gen.Chain()`, `gen.ReverseChain()`, and `gen.Vocab()` expose the models and vocabulary behind `text`. `ReverseChain()` is nil unless built with `Bidirectional()`. `gen.Contains(word)` uses the same exact/lowercase lookup as seeds. Inspect contexts without decoding integer IDs yourself:
-
-```go
-for tokens, observations := range gen.States(2) {
-    fmt.Println(tokens, observations)
-}
-```
-
-The count is how often that context was observed, summed across its possible next tokens. Direct backoff chains expose the same iterator with token IDs through `interned.BackoffChain`. A `*barkov.CompressedChain[T]` has `States()`, `StateTotal(key)`, and `ChoicesCumDist(key)`; the latter returns read-only slices into model storage. `gen.MessageSet()` exposes the whole-message digest set, or nil when anti-verbatim is disabled. Treat model and vocabulary accessors as read-only while generating.
+If you don't like a util we write you can always plug in your own, there's usually just a minimal interface you need to satisfy. `StateEncoder[T]` for state keys, `hashers.Hasher` for digests, `StuckDetector` for retry detection, `SlicePool[T]` for allocation reuse, `GenerativeChain[T]` for the chain itself. The concrete interned chain's extras are reachable through `barkov.RNGSettable` (`SetRNG`) and `barkov.FastMoverKey[K, T]` (`MoveKey`). Godoc has the details.
 
 ## Subpackages
 
-- `.../v2/text`: the quick start above. Start here
-- `.../v2`: the core API: `Chain[T]`, `CompressedChain[T]`, `Gen`, `GenIter`, `NGramSet`, encoders
-- `.../v2/interned`: `Vocabulary`, `TokenID`, `PackedEncoder`, `Build`, `BuildBackoff`, `MessageSet`, `TokenIDPool`
-- `.../v2/nhash`: `HashNGramSet[T]`
-- `.../v2/hashers/{xxh3,xxhash64,fnv}`: hashers for `nhash`
-- `.../v2/stuck`: failure-count cache with TTL expiry on access, used by `WithStuckDetector` with parallel generation
+- `.../v2/text`: the quick start above. Start here.
+- `.../v2`: the core API: `Chain[T]`, `CompressedChain[T]`, `Gen`, `NGramSet`, encoders.
+- `.../v2/interned`: `Vocabulary`, `TokenID`, `PackedEncoder`, `Build` (stateSizes 1-8), `BuildBackoff`.
+- `.../v2/nhash`: `HashNGramSet[T]`.
+- `.../v2/hashers/{xxh3,xxhash64,fnv}`: hashers for `nhash`.
+- `.../v2/stuck`: failed-seed cache with TTL expiry on access.
 
 ## Performance
 
-Benchmark data lives in [benchstat/](benchstat/). The recorded full-length novel benchmark (~630k tokens) showed the interned pipeline running about 2.9x faster and allocating about two-thirds fewer bytes than the plain string pipeline ([results](benchstat/steer_snapshot_build_reuse.txt)). Allocations per op were higher on the interned path because interning has fixed per-build setup the string path skips. The trade is more, smaller allocations for fewer bytes and less wall-clock. These are benchmark snapshots; measure your own corpus and settings.
+Benchmark data lives in `benchstat/`. On a full-length novel (~630k tokens), the interned pipeline runs about 2.9x faster and allocates about two-thirds fewer bytes than the plain string pipeline (`benchstat/steer_snapshot_build_reuse.txt`). Allocations per op are higher on the interned path because interning has fixed per-build setup the string path skips. The trade is more, smaller allocations for fewer bytes and less wall-clock.
 
 ## Compatibility
 
-`v1.x` is feature-frozen at `v1.0.3` on `master`, critical bug fixes only. `v2.x` lives at `github.com/soumitradev/barkov/v2`. The recorded v1 comparison showed the v2 interned pipeline running about 4.8x faster, allocating about one-quarter as many bytes and making ~57x fewer allocations per op ([results](benchstat/v1_vs_v2.txt)). See [MIGRATION.md](MIGRATION.md) for v1 migration notes.
+`v1.x` is feature-frozen at `v1.0.3`, and I really recommend moving to v2. `v2.x` is at `github.com/soumitradev/barkov/v2`. On the same corpus, the v2 interned pipeline runs about 4.8x faster than v1 with about one-quarter as many allocated bytes and ~57x fewer allocations per op (`benchstat/v1_vs_v2.txt`). See [MIGRATION.md](MIGRATION.md) for v1 migration notes.
