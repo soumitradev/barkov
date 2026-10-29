@@ -134,7 +134,7 @@ func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 // indexed tables. At each step it tries the longest context first and
 // backs off to shorter ones until it finds a state with enough corpus
 // support (MinSupport), down to MinOrder. The walk
-// is stateless — a pure function of the state window plus RNG — so a
+// is stateless (a pure function of the state window plus RNG), so a
 // built chain is safe for concurrent readers, except under SetRNG.
 type backoffCore struct {
 	tables    []orderTable // index m-1 = order m
@@ -401,8 +401,8 @@ const (
 // steerView is the per-step snapshot of the steering state: the followers
 // of the window's last MaxVerbatim-1 tokens in the order-(MaxVerbatim-1)
 // table. A candidate completes a verbatim corpus MaxVerbatim-gram iff it
-// belongs to that follower set — the (MaxVerbatim-1)-gram's followers are
-// exactly the tokens that complete a corpus MaxVerbatim-gram — so one
+// belongs to that follower set, because the (MaxVerbatim-1)-gram's followers are
+// exactly the tokens that complete a corpus MaxVerbatim-gram. So one
 // lookup per step replaces the per-candidate probes of the larger
 // order-MaxVerbatim table that steering used to cost.
 type steerView struct {
@@ -441,7 +441,7 @@ func (b *backoffCore) steerSnapshot(window []TokenID) steerView {
 // filtered reports whether emitting tok after window would complete a
 // verbatim MaxVerbatim-gram. End is never filtered: no order-MaxVerbatim
 // state contains End (windows stop before it), so the original
-// per-candidate probe always missed for End — but End IS present in
+// per-candidate probe always missed for End, but End IS present in
 // follower sets as the terminal transition, so it must be excluded
 // explicitly here to preserve those semantics (and let sentences
 // terminate under maximal steering).
@@ -526,7 +526,7 @@ func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, s
 	// Membership test is a cheap compare/scan, so do a two-pass weighted
 	// draw: total the survivors' weights, then draw once and walk. Same
 	// distribution as a draw over the filtered set, but one RNG call
-	// instead of one per survivor — order-1 contexts can have thousands
+	// instead of one per survivor: order-1 contexts can have thousands
 	// of candidates.
 	var total uint32
 	var prev uint32
@@ -590,7 +590,7 @@ func scanCumDist(cum []uint32, choiceNum uint32) int {
 // buildBackoffCore builds one indexedCore per order 1..MaxOrder, one
 // corpus pass each. The per-order builds are independent (corpus is
 // read-only, each goroutine writes its own table slot), so they run
-// concurrently — a MaxOrder-6 build is six full passes, and wall time
+// concurrently. A MaxOrder-6 build is six full passes, and wall time
 // drops to roughly the slowest single pass on multicore machines.
 func buildBackoffCore(cfg BackoffConfig, corpus [][]TokenID) *backoffCore {
 	tables := make([]orderTable, cfg.MaxOrder)

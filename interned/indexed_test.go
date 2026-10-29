@@ -13,7 +13,7 @@ import (
 // Chain[TokenID].BuildCompressed at the matching stateSize. Since the
 // indexed Model is keyed by [N]TokenID and the baseline Model by a
 // packed-encoder string, we bridge the two by reinterpreting the string
-// bytes as [N]TokenID — the two layouts are identical by construction
+// bytes as [N]TokenID. The two layouts are identical by construction
 // (little-endian uint32 per token).
 func TestIndexedEquivalence(t *testing.T) {
 	corpus := [][]string{
@@ -108,7 +108,7 @@ func cumDistToCounts(choices []TokenID, cumDist []uint32) map[TokenID]uint32 {
 // chain that generates non-empty, terminating output. Order 1 has the
 // widest fanout of any supported N (the begin state's followers approach
 // the count of distinct sentence starters), which is exactly the case the
-// build-time fanout panic in buildIndexedCore guards against — this test
+// build-time fanout panic in buildIndexedCore guards against. This test
 // exercises that path at ordinary corpus scale, well under the 65535 cap.
 func TestBuildOrderOneEndToEnd(t *testing.T) {
 	corpus := [][]string{

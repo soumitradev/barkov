@@ -12,7 +12,7 @@ import (
 // indexedCore is the key-type-parameterised core shared by every
 // indexedChainN. K is always a pointer-free fixed-size array
 // type (e.g. [4]TokenID) so the state map's bucket array is invisible to
-// the GC — mark cycles skip it entirely instead of walking hundreds of
+// the GC: mark cycles skip it entirely instead of walking hundreds of
 // thousands of string headers per scan.
 //
 // The per-N wrapper types in indexed.go / indexed_variants.go embed
@@ -40,7 +40,7 @@ func (c *indexedCore[K]) Encoder() barkov.StateEncoder[TokenID] { return c.encod
 
 // pickFollow resolves a ChoicesIndex to a TokenID. Fanout-1 states pack
 // the follower TokenID into Offset at build time, so the hot path returns
-// without touching Choices[] — one fewer cache miss per Count==1 lookup,
+// without touching Choices[]: one fewer cache miss per Count==1 lookup,
 // which dominates most corpora.
 func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
 	if idx.Count == 1 {

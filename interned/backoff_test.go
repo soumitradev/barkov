@@ -163,7 +163,7 @@ func TestBackoffEndToEnd(t *testing.T) {
 // corpus. From window [p a b] with R=3, every candidate at orders 3, 2
 // (only "c") extends the corpus 3-gram (a,b,c) and is filtered; at order
 // 1 the [b] context offers "d" (from "q z b d"), whose probe (a,b,d) is
-// not a corpus 3-gram — so the steered walk must emit "d", while the
+// not a corpus 3-gram, so the steered walk must emit "d", while the
 // unsteered walk (MaxVerbatim=-1) always emits "c" from the order-3
 // context.
 func TestSteeringForcesLowerOrder(t *testing.T) {

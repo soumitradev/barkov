@@ -126,7 +126,7 @@ func BenchmarkGen(b *testing.B) {
 // BenchmarkGenHeavy amortises the per-iteration b.Loop overhead across
 // many Gens so per-Move optimisations show up as a measurable signal.
 // The chain is seeded with a deterministic PCG so each iteration does
-// identical work — variance reflects runtime/GC jitter, not RNG draws.
+// identical work. Variance reflects runtime/GC jitter, not RNG draws.
 func BenchmarkGenHeavy(b *testing.B) {
 	loadBenchmarkFixture(b)
 	b.ResetTimer()

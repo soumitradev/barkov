@@ -5,8 +5,8 @@ import barkov "github.com/soumitradev/barkov/v2"
 // The backoffChainN types are thin wrappers over backoffCore, mirroring
 // the indexedChainN pattern: each exists only to carry the MoveKey method
 // with the [N]TokenID key matching StateSize() == MaxOrder == N, so Gen's
-// FastMoverKey dispatch picks the fast path. Everything else — Move,
-// StateSize, Sentinels, Encoder, SetRNG — is promoted from the embedded
+// FastMoverKey dispatch picks the fast path. Everything else (Move,
+// StateSize, Sentinels, Encoder, SetRNG) is promoted from the embedded
 // core. BuildBackoff is the only entry point; callers reach SetRNG through
 // barkov.RNGSettable.
 type (

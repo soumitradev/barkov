@@ -39,7 +39,7 @@ func GenIter[T comparable](
 // validateOutputIter decorates inner with a whole-output check, without
 // touching the hot loops in genIterSingle/genIterSingleFast. It buffers
 // inner's entire sequence (seed tokens plus generated, sentinels
-// excluded — exactly what Gen would return), then either yields
+// excluded, exactly what Gen would return), then either yields
 // ErrSentenceFailedValidation or replays the buffered tokens. This makes
 // generation non-streaming by definition: nothing is yielded until inner
 // completes.
@@ -77,7 +77,7 @@ func validateOutputIter[T comparable](ctx context.Context, inner iter.Seq2[T, er
 // For the common unconfigured call (no seed, validators, threading, or
 // stuck detection) on a chain that implements FastMoverKey, Gen skips the
 // iterator machinery entirely and runs the walk in a plain loop: same
-// MoveKey sequence, same RNG draws, same output — without the per-token
+// MoveKey sequence, same RNG draws, same output, without the per-token
 // yield call or the per-call config/closure allocations.
 func Gen[T comparable](
 	ctx context.Context,

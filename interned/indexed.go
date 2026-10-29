@@ -9,9 +9,9 @@ import (
 // The indexedChainN types are thin wrappers over the generic indexedCore.
 // Each exists only to give its stateSize a distinct Go type so that
 // FastMoverKey[[N]TokenID, TokenID] interfaces stay separate and Gen can
-// dispatch on chain.StateSize() to the matching one. All behaviour — Model
+// dispatch on chain.StateSize() to the matching one. All behaviour (Model
 // layout, lookup, Move(string), MoveKey, SetRNG, StateSize, Sentinels,
-// Encoder — is promoted from the embedded core. They are unexported: Build
+// Encoder) is promoted from the embedded core. They are unexported: Build
 // is the only entry point, and callers reach the concrete affordances
 // (SetRNG, MoveKey) through the barkov.RNGSettable / barkov.FastMoverKey
 // interfaces rather than the concrete types.
@@ -38,7 +38,7 @@ type (
 //	chain.(barkov.RNGSettable).SetRNG(r)                       // deterministic RNG
 //	chain.(barkov.FastMoverKey[[4]TokenID, TokenID]).MoveKey(k) // direct MoveKey
 //
-// Panics on stateSize outside 1..8 — the range matches the FastMoverKey
+// Panics on stateSize outside 1..8; the range matches the FastMoverKey
 // dispatch in the core Gen path.
 func Build(stateSize int, corpus [][]TokenID) barkov.GenerativeChain[TokenID] {
 	switch stateSize {

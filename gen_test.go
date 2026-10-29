@@ -352,7 +352,7 @@ func TestGenOutputValidator(t *testing.T) {
 // TestWithNGramValidator covers WithNGramValidator's width propagation:
 // an NGramSet built with n=4 must actually be probed with 4-token
 // windows (not the StateSize+2=6 default, which would never trigger on
-// this corpus's 5-token output — the exact silent no-op the old
+// this corpus's 5-token output: the exact silent no-op the old
 // hand-wired WithValidator + NGramSet combination suffered from). The
 // second subtest pins that the width survives the whole-config copy into
 // each threaded worker.

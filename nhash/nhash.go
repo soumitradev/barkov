@@ -1,6 +1,6 @@
 // Package nhash provides a hash-keyed anti-verbatim validator.
 // It uses about 50% less memory than barkov.NGramSet by storing uint64
-// hashes instead of full string keys. The Hasher is pluggable — pass
+// hashes instead of full string keys. The Hasher is pluggable: pass
 // hashers/xxh3.XXH3{} for best performance or hashers/fnv.FNV{} for
 // zero extra dependencies.
 package nhash

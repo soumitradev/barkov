@@ -323,7 +323,7 @@ func genIterSingleFast[T comparable, K comparable](
 		// Hoist ctx.Done() out of the per-token loop. context.Background()
 		// (and any context with no deadline/cancellation) returns a nil
 		// channel from Done(); receiving from nil blocks forever, so the
-		// select's default arm always wins — but the select call itself
+		// select's default arm always wins, but the select call itself
 		// still runs every token. When done == nil we skip it entirely,
 		// which is the common case (and every gen benchmark). When a real
 		// cancellable context is in play, done != nil and we keep the

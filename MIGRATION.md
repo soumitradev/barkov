@@ -2,7 +2,35 @@
 
 Every public API change from `v1.0.3` to `v2.0.0`. The short version: generics, functional gen options, and a subpackage split.
 
-If you already migrated to `v2.0.0-beta.6`, the [beta.6 → beta.7 section](#upgrading-within-v2-beta6--beta7) below is the only part you need; the rest is the full v1 → v2 story.
+Already on a v2 beta? Read the upgrade sections for the versions you're skipping, then stop. The rest is the full v1 → v2 story.
+
+## Upgrading within v2: beta.7 → rc.1
+
+Most code compiles unchanged. Three things can break, and one default changed.
+
+**`ChoicesIndex.Count` and `Obs` are `uint32`.** They were `uint16`, which capped a state at 65535 distinct followers. If you read them directly, drop any `uint32(...)` casts and check your own arithmetic.
+
+**`BackoffConfig.MinSupport` defaults to 1.** It used to silently default to 3. Same config, different output: the engine now trusts contexts it used to skip, and order 1 is no longer exempt from the threshold. Set `MinSupport: 3` to get the old behaviour. The new `MinOrder` field sets the shortest context the walk may fall back to (default 1). Out-of-range values panic in `BuildBackoff`; `text.New` returns them as errors.
+
+**`Gen` returns `nil` for an empty output.** It used to return an empty slice. Only matters if you compare against `[]T{}`.
+
+**Stricter `text` options.** `text.New` and `Generate` now reject bad values instead of quietly ignoring them: negative lengths, timeouts or thread counts, `Retries` below 1, and `RNG` combined with `Threads` above 1.
+
+**Custom `GenerativeChain` implementations.** `Move` may now be handed a string it can keep, and it must return promptly so cancellation and worker shutdown can finish. If yours blocks, fix that.
+
+New, nothing to migrate:
+
+| Where | What |
+| --- | --- |
+| `text` | `Save` / `Load` for snapshots, so you don't retrain on startup. `Compact` shrinks a freshly trained generator to the same size |
+| `text` | `Validate` checks an edited output against the same rules `Generate` uses |
+| `text` | `Bidirectional` + `SeedMiddle` to grow a sentence around some words |
+| `text` | Per-call `WithMaxTokens`, `WithTimeout`, `WithRetries`, `WithThreads` |
+| `text` | `WithEscape` and `WithoutFragments` for less copying; `WithoutCopySteering` and `WithVerbatimFallback` for more |
+| `text` | `MinOrder`, `MinSupport`, `MaxTokens` at construction |
+| `text` | `Contains`, `States`, `SetRNG`, `ReverseChain`, `MessageSet` |
+| core | `WithMaxTokens`, `WithInitialState`, `ErrInsufficientSupport` |
+| `interned` | `MessageSet`, `ModelSnapshot`, `Compact`, and the `BackoffChain` interface |
 
 ## Upgrading within v2: beta.6 → beta.7
 
@@ -10,7 +38,7 @@ beta.7 fixes three correctness holes reported from real-world use, collapses the
 
 **`go mod tidy` now exits 0.** The `hashers/*` packages used to be separate nested modules, so every consumer's `go mod tidy` walked into packages that don't exist inside the tagged `barkov/v2` module and exited non-zero. They are now folded into the main module. No code change; just re-run `go mod tidy`.
 
-**`text` package: the sugared entry point.** New in beta.7. Strings in, non-parroting sentences out, fastest engine and anti-verbatim wired up for you. Nothing to migrate — this is additive — but it's the recommended starting point for new code.
+**`text` package: the sugared entry point.** New in beta.7. Strings in, non-parroting sentences out, fastest engine and anti-verbatim wired up for you. Nothing to migrate since it's additive, but it's the recommended starting point for new code.
 
 ```go
 gen, _ := text.New(corpus) // corpus [][]string
@@ -73,14 +101,12 @@ grep -rln '"github.com/soumitradev/barkov"' --include='*.go' . \
 go mod tidy
 ```
 
-The `sed` recipe is the right tool for a large monorepo with many import sites. For a single-repo migration, dropping the old requirement and re-fetching the new module path is often cleaner — the compiler then points at each remaining import one at a time instead of relying on a blanket rewrite:
+The `sed` recipe is the right tool for a large monorepo with many import sites. For a single-repo migration, dropping the old requirement and re-fetching the new module path is often cleaner: the compiler then points at each remaining import one at a time instead of relying on a blanket rewrite:
 
 ```bash
 go mod edit -droprequire github.com/soumitradev/barkov
-go get github.com/soumitradev/barkov/v2@v2.0.0-beta.6
+go get github.com/soumitradev/barkov/v2@v2.0.0-rc.1
 ```
-
-**beta.7 note:** if you're migrating from `v2.0.0-beta.6`, upgrade straight to `v2.0.0-beta.7` — it fixes friction #1 from the beta.6 field report: `hashers/xxh3` and `hashers/xxhash64` used to be separate nested Go modules, so any consumer's `go mod tidy` walked into packages that don't exist inside the tagged `barkov/v2` module and exited non-zero. As of beta.7 those hashers are folded into the main module and `go mod tidy` exits 0 for consumers who only import the root `barkov` package.
 
 ## Chain types become generic
 
@@ -154,7 +180,8 @@ v2:
 ```go
 type ChoicesIndex struct {
     Offset uint32
-    Count  uint16
+    Count  uint32
+    Obs    uint32 // total observations of this state
 }
 type CompressedChain[T comparable] struct {
     Model   map[string]ChoicesIndex
@@ -301,12 +328,12 @@ cache := stuck.NewCache()
 
 ## Validators
 
-The old "always anti-verbatim" pattern of passing `func([]string) bool` is preserved — any function of that shape works with `WithValidator`.
+The old "always anti-verbatim" pattern of passing `func([]string) bool` is preserved: any function of that shape works with `WithValidator`.
 
 v2 adds two built-in validator builders:
 
-- `barkov.NGramSet[T]` — string-keyed, in-core, zero external deps.
-- `nhash.HashNGramSet[T]` — hash-keyed (uint64), ~50% less memory. Plug in `hashers/xxh3`, `hashers/xxhash64`, or `hashers/fnv`.
+- `barkov.NGramSet[T]`: string-keyed, in-core, zero external deps.
+- `nhash.HashNGramSet[T]`: hash-keyed (uint64), ~50% less memory. Plug in `hashers/xxh3`, `hashers/xxhash64`, or `hashers/fnv`.
 
 ```go
 import (
@@ -351,9 +378,9 @@ For string chains `InitChain` picks sensible defaults (`"</BEGIN/>"`, `"</END/>"
 
 ## Removed
 
-- `barkov.GenWithStart`, `GenPruned`, `GenPrunedWithStart`, `GenThreaded`, `GenThreadedWithStart` — collapsed into `Gen(ctx, chain, opts...)`.
-- `Result` struct — unused.
-- `State` type alias — it was `string`; v2 uses `string` directly.
-- `Chain[T].Build` — was a backcompat alias for `BuildRaw`. Call `BuildRaw` directly.
-- `ConstructState` / `DeconstructState` — replaced by `SepEncoder{Sep: SEP}.Encode` / `.Decode`.
-- `interned.IndexedCompressedChain*` per-N types, `BuildCompressedIndexed*` constructors, and `interned.InitChain` — collapsed into `interned.Build(stateSize, corpus)`, which returns a `GenerativeChain[TokenID]`. Reach concrete behavior through `barkov.RNGSettable` / `barkov.FastMoverKey` assertions.
+- `barkov.GenWithStart`, `GenPruned`, `GenPrunedWithStart`, `GenThreaded`, `GenThreadedWithStart`: collapsed into `Gen(ctx, chain, opts...)`.
+- `Result` struct: unused.
+- `State` type alias: it was `string`; v2 uses `string` directly.
+- `Chain[T].Build`: was a backcompat alias for `BuildRaw`. Call `BuildRaw` directly.
+- `ConstructState` / `DeconstructState`: replaced by `SepEncoder{Sep: SEP}.Encode` / `.Decode`.
+- `interned.IndexedCompressedChain*` per-N types, `BuildCompressedIndexed*` constructors, and `interned.InitChain`: collapsed into `interned.Build(stateSize, corpus)`, which returns a `GenerativeChain[TokenID]`. Reach concrete behavior through `barkov.RNGSettable` / `barkov.FastMoverKey` assertions.

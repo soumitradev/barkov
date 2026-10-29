@@ -1,6 +1,6 @@
 // Validators: the three ways to reject output, and when each applies.
 // A validator is any func([]T) bool; Gen calls it as the chain walks
-// and retries on rejection.
+// and a rejection ends that attempt. Gen doesn't retry for you.
 //
 // If you came here for anti-verbatim checking only: you don't need any
 // of this on the backoff engine (examples/backoff), it steers around

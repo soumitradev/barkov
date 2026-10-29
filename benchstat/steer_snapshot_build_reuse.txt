@@ -40,7 +40,7 @@ Changes, in order of impact:
 String Tier-1 path: unchanged. First measurement round showed phantom
 +28..+75% regressions on string/* e2e; reverse-order rerun made them
 insignificant (p>=0.06) and interleaved A/B runs of prebuilt binaries on
-string/FNV + string/XXH3 show p=0.886 — thermal ordering drift, not code.
+string/FNV + string/XXH3 show p=0.886: thermal ordering drift, not code.
 PipelineSimpleVsMaxOpt/simple: p=0.932 flat.
 
 Full test suite green, including -race on ., ./interned, ./text.

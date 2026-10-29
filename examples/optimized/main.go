@@ -60,7 +60,8 @@ func main() {
 	// xxh3-hashed anti-verbatim validator. On a real corpus this rejects
 	// generations that reproduce a corpus n-gram verbatim. On a toy corpus
 	// most outputs are verbatim by construction, so the validator rejects
-	// nearly every attempt. That's expected. WithThreaded retries.
+	// nearly every attempt. That's expected. WithThreaded runs many attempts
+	// in parallel and keeps the first one that passes.
 	validator := nhash.New(
 		encoded,
 		compressed.StateSize()+2,
@@ -85,7 +86,7 @@ func main() {
 }
 
 // -----------------------------------------------------------------------
-// For stateSizes 1–8, swap the build line for interned.Build. On large
+// For stateSizes 1-8, swap the build line for interned.Build. On large
 // corpora we've observed this path running roughly 1.7x faster and using
 // about 35% less memory than the generic build path (see
 // benchstat/pipeline_simple_vs_maxopt.txt). Everything downstream keeps

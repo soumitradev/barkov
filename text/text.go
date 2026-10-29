@@ -33,7 +33,7 @@ type Generator struct {
 }
 
 // New builds a Generator from a pre-tokenized corpus (each inner slice is
-// one message's tokens — text does no tokenization itself). It builds the
+// one message's tokens; text does no tokenization itself). It builds the
 // vocabulary, interns the corpus, and constructs the engine internally:
 // a variable-order backoff chain that samples where the corpus genuinely
 // branches and steers around verbatim reproductions during the walk. It

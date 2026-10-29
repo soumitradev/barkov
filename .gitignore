@@ -1,7 +1,3 @@
-# Planning docs (kept locally, not part of the library)
-COMPAT_PLAN.md
-PERF_PLAN.md
-
 # Benchmark audit snapshots
 benchstat/public_api_*.txt
 benchstat/compat_floor_interned.txt

@@ -1,4 +1,4 @@
-// The backoff engine up close: interned.BuildBackoff with its three
+// The backoff engine up close: interned.BuildBackoff with its
 // knobs, deterministic output via SetRNG, and what steering actually
 // does to the output. This is the engine text.New wires up for you;
 // build it yourself when you want to tune it.
@@ -31,9 +31,10 @@ func main() {
 
 	// The knobs, set low so a toy corpus can still generate. On real
 	// corpora the zero-value config is what you want: MaxOrder 6,
-	// MinSupport 1, MaxVerbatim 6.
+	// MinOrder 1, MinSupport 1, MaxVerbatim 6.
 	//
 	//   MaxOrder:    longest context tried (2-8)
+	//   MinOrder:    shortest context it may fall back to (left at 1 here)
 	//   MinSupport:  observations a context needs to be trusted
 	//   MaxVerbatim: longest verbatim corpus run allowed out (-1 disables)
 	chain := interned.BuildBackoff(interned.BackoffConfig{

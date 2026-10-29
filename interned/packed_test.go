@@ -29,7 +29,7 @@ func TestPackedEncoderRoundTrip(t *testing.T) {
 }
 
 // TestPackedEncoderAppendEquivalence verifies the AppendEncoder fast path
-// produces byte-identical output to Encode — the contract BuildRaw relies on.
+// produces byte-identical output to Encode, the contract BuildRaw relies on.
 func TestPackedEncoderAppendEquivalence(t *testing.T) {
 	enc := PackedEncoder{}
 	cases := [][]TokenID{

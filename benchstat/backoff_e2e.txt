@@ -3,11 +3,11 @@ count=5; GenBackoff at -cpu=4, EndToEndAllConfigs/backoff at -cpu=24.
 
 Reading the numbers against the closest previous quality setup
 (interned/XXH3 at ~141ms e2e, ~14µs/gen indexed micro):
-- e2e (build + one gen): backoff ~1.0s vs 141ms — ~7x, one corpus pass per
+- e2e (build + one gen): backoff ~1.0s vs 141ms (~7x), one corpus pass per
   order (6 tables). B/op 484Mi is transient build churn, not residency.
 - gen micro (10k gens/op): plain 124.9ms = ~12.5µs/gen (multi-order probe
   stack alone, ~same as a single-order chain plus backoff probes); steered
-  2.89s = ~289µs/gen — the per-candidate steering probes at wide order-1
+  2.89s = ~289µs/gen; the per-candidate steering probes at wide order-1
   contexts dominate. Allocation is flat vs plain (~37 allocs/gen) after
   hoisting the probe buffer; the remaining cost is cache misses, not GC.
 - What steering buys for that: zero verbatim 6-grams in 1,000 sentences

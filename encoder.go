@@ -39,7 +39,7 @@ type SepEncoder struct {
 // DefaultStringEncoder is the SepEncoder that string chains use by default
 // (InitChain wires it up, and it keys the same map as any string chain
 // built with SEP). Reference it instead of allocating SepEncoder{Sep: SEP}
-// in hot loops — for example when decoding CompressedChain state keys for
+// in hot loops, for example when decoding CompressedChain state keys for
 // custom scoring.
 var DefaultStringEncoder = SepEncoder{Sep: SEP}
 

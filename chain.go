@@ -54,8 +54,8 @@ func (a *keyArena) Append(b []byte) string {
 
 // keyStream wraps the arena + append-encoder plumbing that every
 // string-keyed corpus scan uses (BuildRaw, BuildCompressed, NGramSet).
-// Callers call probe(window) to get an ephemeral map key, and — on
-// cache miss — intern(probeKey) to upgrade it to a stable heap-backed
+// Callers call probe(window) to get an ephemeral map key and, on a
+// cache miss, intern(probeKey) to upgrade it to a stable heap-backed
 // key. When the encoder does not implement AppendEncoder, probe falls
 // back to the per-call Encode path and intern is a no-op.
 //
@@ -154,7 +154,7 @@ func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 }
 
 // BuildRaw constructs the chain from a pre-encoded corpus. The corpus
-// is already in the target token type T — no string conversion happens.
+// is already in the target token type T, so no string conversion happens.
 // This is the canonical, generic build path.
 //
 // When the encoder implements AppendEncoder[T], BuildRaw uses a
@@ -264,7 +264,7 @@ func (c *Chain[T]) MoveTokens(tokens []T) (T, error) {
 // surviving states that pointed at it, so Prune repeats until no dangling
 // transition remains. That keeps Gen from faulting with ErrStateNotFound
 // mid-walk. Aggressive minCount can therefore cascade away large parts of
-// the chain — including the begin state — leaving a model Gen cannot start
+// the chain, including the begin state, leaving a model Gen cannot start
 // from (it then returns ErrStateNotFound). Validate and a begin-state
 // presence check are the caller's preflight before Gen.
 func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
@@ -319,7 +319,7 @@ func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
 // transition token out of the state whose decoded tokens are toks. The
 // successor of state [t0 t1 … t_{n-1}] on token x is the window shifted
 // left by one: [t1 … t_{n-1} x]. Callers must not pass the End sentinel
-// as token — transitions to End are terminal and have no successor state.
+// as token: transitions to End are terminal and have no successor state.
 func (c *Chain[T]) successorKey(toks []T, token T) string {
 	next := make([]T, len(toks))
 	copy(next, toks[1:])
@@ -664,7 +664,7 @@ func (cc *CompressedChain[T]) ChoicesCumDist(state string) (choices []T, cumDist
 
 // StateTotal returns the total observation weight of state (the sum of
 // all its transition counts), or ErrStateNotFound. CumDist is cumulative
-// within each state's group, so the total is the group's last entry —
+// within each state's group, so the total is the group's last entry, with
 // no iteration over followers needed.
 func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
 	idx, ok := cc.Model[state]

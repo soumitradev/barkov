@@ -81,7 +81,7 @@ func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
 
 // WithOutputValidator installs a whole-output validator. It is called
 // exactly once with the complete output (seed tokens plus generated,
-// sentinels excluded — the same slice Gen would return); returning false
+// sentinels excluded, the same slice Gen would return); returning false
 // aborts the attempt with ErrSentenceFailedValidation. Unlike
 // WithValidator, this also covers outputs shorter than StateSize+2.
 //
@@ -100,7 +100,7 @@ func WithMaxTokens[T comparable](n int) GenOption[T] {
 	return func(c *genConfig[T]) { c.maxTokens = n }
 }
 
-// WithNGramValidator installs a WindowValidator — a per-window validator
+// WithNGramValidator installs a WindowValidator, a per-window validator
 // that knows its own width. Gen slides a window of exactly v.N() tokens
 // and calls v.Validate on it, eliminating the silent width mismatch that
 // WithValidator has when hand-wired to an NGramSet built with a

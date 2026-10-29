@@ -17,14 +17,14 @@ import (
 // fixed-size PODs). Hashing is an inline multiply-xorshift mixer over
 // the key's 8-byte lanes (see hash): sizeof(K) is a compile-time
 // constant per instantiation, so the mixer compiles to straight-line
-// code — no runtime call, unlike maphash.Comparable. The per-map seed
+// code with no runtime call, unlike maphash.Comparable. The per-map seed
 // keeps placement unpredictable across instances. Note the mixer is
 // not adversary-grade; that is the right trade for corpus-built
 // tables of integer tuples, where multiply mixing is collision-free
 // in practice.
 //
 // V must be comparable and its zero value must be used as the "slot
-// empty" sentinel — callers must never insert a zero-valued V. For
+// empty" sentinel, so callers must never insert a zero-valued V. For
 // ChoicesIndex this is free: Count==0 is never valid for a real
 // state (every state has ≥1 follow token). Dropping an occupied
 // bool shrinks [4]TokenID entries from 28→24 bytes (14% denser
@@ -82,9 +82,9 @@ func (m *stateMap[K, V]) hash(key K) uint64 {
 
 // Grow at 3/5 load. A prior 0.75 attempt cost ~6% of the gen win, but
 // profile showed Get's cost is ~88% memory latency on the first bucket
-// load — shrinking the table wins back cache residency that outweighs
+// load, so shrinking the table wins back cache residency that outweighs
 // the ~1 extra probe distance at 0.6 vs 0.5. Power-of-2 rounding lands
-// the fill-time load factor at ~0.3–0.55.
+// the fill-time load factor at ~0.3-0.55.
 const (
 	loadFactorNum = 3
 	loadFactorDen = 5
