@@ -112,6 +112,8 @@ type genConfig struct {
 	seedEnding       bool
 	spliceCheck      bool
 	noFragments      bool
+	trace            *Trace
+	fallback         bool
 }
 
 type generationConfig struct {

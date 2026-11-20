@@ -33,15 +33,16 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			// permitted context, while still emitting the complete supplied seed.
 			contextSeed = seed[max(0, len(seed)-g.minOrder):]
 		}
-		fwdOpts, fwdErr := g.middleOptions(g.chain, seed, contextSeed, gc)
-		var fwd, bwd []interned.TokenID
+		fwdOpts, fwdHistory, fwdErr := g.middleOptions(g.chain, seed, contextSeed, gc)
+		var fwd, bwd, bwdHistory []interned.TokenID
 		var bwdErr error
 		if forwardOnly {
 			if fwdErr == nil {
 				fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
 			}
 		} else {
-			bwdOpts, err := g.middleOptions(g.reverseChain, revSeed, revSeed, gc)
+			bwdOpts, history, err := g.middleOptions(g.reverseChain, revSeed, revSeed, gc)
+			bwdHistory = history
 			bwdErr = err
 			switch {
 			case fwdErr == nil && bwdErr == nil:
@@ -50,7 +51,9 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 				fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
 			}
 		}
+		a := g.startAttempt(gc, fwd, fwdErr, bwd, bwdErr)
 		if fwdErr != nil {
+			g.finishAttempt(gc, a, nil, fwdErr)
 			if !retryableAttempt(fwdErr) {
 				return nil, fwdErr
 			}
@@ -61,19 +64,24 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			continue
 		}
 		if bwdErr != nil && !retryableAttempt(bwdErr) && !errors.Is(bwdErr, barkov.ErrStateNotFound) {
+			g.finishAttempt(gc, a, nil, bwdErr)
 			return nil, bwdErr
 		}
+		walk := middleWalk{seed: len(seed), hidden: len(seed) - len(contextSeed), history: fwdHistory, backwardHistory: bwdHistory}
 		if len(fwd) <= len(seed) {
 			if gc.seedEnding && !forwardOnly && bwdErr == nil && len(bwd) > len(seed) {
 				slices.Reverse(bwd)
 				err := g.validateJoined(bwd, gc)
+				g.finishAttempt(gc, a, bwd, err)
 				if err == nil {
+					g.traceWalk(gc, walk, len(bwd)-len(seed))
 					return g.vocab.DecodeTokens(bwd), nil
 				}
 				lastErr = err
 				continue // retry the pair; one rejection must not end seed endings
 			}
 			lastErr = fmt.Errorf("barkov: no forward continuation after the seed: %w", barkov.ErrSentenceFailedValidation)
+			g.finishAttempt(gc, a, nil, lastErr)
 			forwardOnly = true
 			continue
 		}
@@ -84,9 +92,12 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			spliced = append(spliced, fwd...)
 			err := g.validateJoined(spliced, gc)
 			if err == nil {
+				g.finishAttempt(gc, a, spliced, nil)
+				g.traceWalk(gc, walk, len(bwd)-len(seed))
 				return g.vocab.DecodeTokens(spliced), nil
 			}
 			if gc.spliceCheck {
+				g.finishAttempt(gc, a, spliced, err)
 				lastErr = err
 				continue // resample both halves rather than keep only one
 			}
@@ -94,17 +105,38 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 		// Validate the complete result, never the temporary or reversed halves.
 		// A rejected splice can still leave a useful forward-only response.
 		lastErr = g.validateJoined(fwd, gc)
+		g.finishAttempt(gc, a, fwd, lastErr)
 		if lastErr == nil {
+			g.traceWalk(gc, walk, 0)
 			return g.vocab.DecodeTokens(fwd), nil
 		}
 	}
 	return nil, lastErr
 }
 
-func (g *Generator) middleOptions(chain interned.BackoffChain, seed, contextSeed []interned.TokenID, gc *genConfig) ([]barkov.GenOption[interned.TokenID], error) {
+// middleWalk is what an attempt knows of its walk before the result is kept
+type middleWalk struct {
+	seed, hidden             int
+	history, backwardHistory []interned.TokenID // in walk order
+}
+
+// traceWalk records the walk of a middle-out result whose seed sits at index
+func (g *Generator) traceWalk(gc *genConfig, w middleWalk, index int) {
+	if gc.trace == nil {
+		return
+	}
+	backward := g.vocab.DecodeTokens(w.backwardHistory)
+	slices.Reverse(backward)
+	gc.trace.Walk = Walk{Seed: index, SeedLen: w.seed, Middle: true, Backward: index > 0, HiddenSeed: w.hidden,
+		History: g.vocab.DecodeTokens(w.history), BackwardHistory: backward, Unsteered: gc.noSteering || gc.fallback}
+}
+
+// middleOptions also returns the history sampled before a short seed, in
+// walk order
+func (g *Generator) middleOptions(chain interned.BackoffChain, seed, contextSeed []interned.TokenID, gc *genConfig) ([]barkov.GenOption[interned.TokenID], []interned.TokenID, error) {
 	history, err := chain.SeedContext(contextSeed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Unknown history is not a sentence boundary. An ID absent from the
 	// trained model makes longer, fabricated contexts miss their lookup.
@@ -117,7 +149,7 @@ func (g *Generator) middleOptions(chain interned.BackoffChain, seed, contextSeed
 		known = known[len(known)-len(state):]
 	}
 	copy(state[len(state)-len(known):], known)
-	return []barkov.GenOption[interned.TokenID]{barkov.WithSeed(seed), barkov.WithInitialState(state), barkov.WithMaxTokens[interned.TokenID](gc.maxTokens), barkov.WithParallelism[interned.TokenID](gc.threads)}, nil
+	return []barkov.GenOption[interned.TokenID]{barkov.WithSeed(seed), barkov.WithInitialState(state), barkov.WithMaxTokens[interned.TokenID](gc.maxTokens), barkov.WithParallelism[interned.TokenID](gc.threads)}, history, nil
 }
 
 // validateJoined validates an assembled middle-out output, including copied

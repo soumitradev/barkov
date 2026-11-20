@@ -23,6 +23,9 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 		return nil, err
 	}
 
+	if gc.trace != nil {
+		*gc.trace = Trace{}
+	}
 	if gc.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, gc.timeout)
@@ -43,6 +46,7 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 		fallback.reverseChain = g.reverseChain.WithoutVerbatim()
 	}
 	fallback.messages = nil
+	gc.fallback = true
 	return fallback.generate(ctx, &gc)
 }
 
@@ -86,7 +90,11 @@ func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []i
 	var lastErr error
 	for attempt := 0; attempt < gc.retries; attempt++ {
 		out, err := barkov.Gen(ctx, g.chain, genOpts...)
+		g.finishAttempt(gc, g.startAttempt(gc, out, err, nil, nil), out, err)
 		if err == nil {
+			if gc.trace != nil {
+				gc.trace.Walk = Walk{SeedLen: len(seed), Unsteered: gc.noSteering || gc.fallback}
+			}
 			return g.vocab.DecodeTokens(out), nil
 		}
 		if !retryableAttempt(err) {

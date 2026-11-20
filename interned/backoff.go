@@ -53,6 +53,9 @@ type BackoffChain interface {
 	// interpolates across context orders instead of always using the
 	// longest one (see backoffCore.escape). scale 0 restores the default.
 	WithEscape(scale float64) BackoffChain
+	// Options explains one step of the walk after window; see
+	// backoffCore.Options.
+	Options(window []TokenID) ([]OrderOptions, int)
 }
 
 // withDefaults validates cfg and fills zero values with defaults. Panics
