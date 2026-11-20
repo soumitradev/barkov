@@ -316,7 +316,7 @@ func TestMaxTokens(t *testing.T) {
 			t.Fatalf("expected the short complete path, not a truncated long path: %v", out)
 		}
 	}
-	if out, err := g.Generate(ctx, text.Seed([]string{"one", "two", "three", "four"}), text.WithMaxTokens(4), text.WithRetries(1)); !errors.Is(err, barkov.ErrSentenceFailedValidation) || out != nil {
+	if out, err := g.Generate(ctx, text.Seed([]string{"one", "two", "three", "four"}), text.WithMaxTokens(4), text.WithRetries(1)); !errors.Is(err, barkov.ErrSentenceFailedValidation) || !errors.Is(err, barkov.ErrTokenLimit) || out != nil {
 		t.Fatalf("impossible cap should reject without partial output: %v %v", out, err)
 	}
 }

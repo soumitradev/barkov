@@ -34,10 +34,10 @@ func (g *Generator) Validate(tokens []string, opts ...GenOption) error {
 		return err
 	}
 	if gc.noFragments && g.chain.IsFragment(ids) {
-		return fmt.Errorf("barkov: output is a piece of one corpus message: %w", barkov.ErrSentenceFailedValidation)
+		return fmt.Errorf("barkov: %w (a piece of one message): %w", barkov.ErrCopiesCorpus, barkov.ErrSentenceFailedValidation)
 	}
 	if !gc.noSteering && g.chain.CopiesRun(ids) {
-		return fmt.Errorf("barkov: output copies a corpus run: %w", barkov.ErrSentenceFailedValidation)
+		return fmt.Errorf("barkov: %w (a run): %w", barkov.ErrCopiesCorpus, barkov.ErrSentenceFailedValidation)
 	}
 	return nil
 }

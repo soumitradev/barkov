@@ -97,7 +97,7 @@ func TestVerbatimFallbackKeepsOtherConstraints(t *testing.T) {
 		want error
 	}{
 		{"support", []text.Option{text.MinSupport(3)}, []string{"seed"}, barkov.ErrInsufficientSupport},
-		{"length", []text.Option{text.MaxTokens(1)}, []string{"seed"}, barkov.ErrSentenceFailedValidation},
+		{"length", []text.Option{text.MaxTokens(1)}, []string{"seed"}, barkov.ErrTokenLimit},
 		{"terminal", nil, []string{"after"}, barkov.ErrSentenceFailedValidation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

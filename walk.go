@@ -111,7 +111,7 @@ func appendHistory[T any](history []T, token T, width int) []T {
 }
 
 func tokenLimitError(limit int) error {
-	return fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", limit, ErrSentenceFailedValidation)
+	return fmt.Errorf("barkov: %w (%d): %w", ErrTokenLimit, limit, ErrSentenceFailedValidation)
 }
 
 func errorIter[T any](err error) iter.Seq2[T, error] {

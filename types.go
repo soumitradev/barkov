@@ -55,4 +55,14 @@ const ErrInsufficientSupport = errorCause("insufficient context observations")
 const ErrStateNotFound = errorCause("state does not exist in model")
 const ErrSentenceTooShort = errorCause("generated sentence too short")
 const ErrSentenceFailedValidation = errorCause("sentence failed validation")
+
+// ErrTokenLimit means an attempt ran past WithMaxTokens before it ended. It
+// is wrapped together with ErrSentenceFailedValidation, so callers can test
+// for either.
+const ErrTokenLimit = errorCause("output exceeded maximum tokens")
+
+// ErrCopiesCorpus means an attempt reproduced training text the generator was
+// told to avoid. Like ErrTokenLimit, it comes wrapped with
+// ErrSentenceFailedValidation.
+const ErrCopiesCorpus = errorCause("output copies the corpus")
 const ErrGenerationTimeout = errorCause("sentence generation timed out")

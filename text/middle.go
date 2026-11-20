@@ -159,20 +159,20 @@ func (g *Generator) validateJoined(out []interned.TokenID, gc *genConfig) error 
 		return err
 	}
 	if gc.noFragments && g.chain.IsFragment(out) {
-		return fmt.Errorf("barkov: output is a piece of one corpus message: %w", barkov.ErrSentenceFailedValidation)
+		return fmt.Errorf("barkov: %w (a piece of one message): %w", barkov.ErrCopiesCorpus, barkov.ErrSentenceFailedValidation)
 	}
 	if gc.spliceCheck && g.chain.CopiesRun(out) {
-		return fmt.Errorf("barkov: joined output copies a corpus run across the seed: %w", barkov.ErrSentenceFailedValidation)
+		return fmt.Errorf("barkov: %w (a run across the seed): %w", barkov.ErrCopiesCorpus, barkov.ErrSentenceFailedValidation)
 	}
 	return nil
 }
 
 func (g *Generator) validateResult(out []interned.TokenID, limit int) error {
 	if limit > 0 && len(out) > limit {
-		return fmt.Errorf("barkov: output exceeded maximum tokens (%d): %w", limit, barkov.ErrSentenceFailedValidation)
+		return fmt.Errorf("barkov: %w (%d): %w", barkov.ErrTokenLimit, limit, barkov.ErrSentenceFailedValidation)
 	}
 	if g.messages != nil && g.messages.Contains(out) {
-		return fmt.Errorf("barkov: output repeats a corpus message: %w", barkov.ErrSentenceFailedValidation)
+		return fmt.Errorf("barkov: %w (a whole message): %w", barkov.ErrCopiesCorpus, barkov.ErrSentenceFailedValidation)
 	}
 	return nil
 }
