@@ -89,11 +89,19 @@ func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []i
 
 	var lastErr error
 	for attempt := 0; attempt < gc.retries; attempt++ {
-		out, err := barkov.Gen(ctx, g.chain, genOpts...)
+		chain := g.chain
+		var fwdLive []LiveStep
+		if gc.captureLiveSteps && gc.trace != nil {
+			chain = chain.WithObserver(g.liveStepObserver(false, &fwdLive))
+		}
+		out, err := barkov.Gen(ctx, chain, genOpts...)
 		g.finishAttempt(gc, g.startAttempt(gc, out, err, nil, nil), out, err)
 		if err == nil {
 			if gc.trace != nil {
 				gc.trace.Walk = Walk{SeedLen: len(seed), Unsteered: gc.noSteering || gc.fallback}
+				if gc.captureLiveSteps {
+					gc.trace.LiveSteps = fwdLive
+				}
 			}
 			return g.vocab.DecodeTokens(out), nil
 		}

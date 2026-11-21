@@ -113,6 +113,7 @@ type genConfig struct {
 	spliceCheck      bool
 	noFragments      bool
 	trace            *Trace
+	captureLiveSteps bool
 	fallback         bool
 }
 

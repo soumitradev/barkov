@@ -34,21 +34,27 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			contextSeed = seed[max(0, len(seed)-g.minOrder):]
 		}
 		fwdOpts, fwdHistory, fwdErr := g.middleOptions(g.chain, seed, contextSeed, gc)
+		fwdChain, revChain := g.chain, g.reverseChain
+		var fwdLive, bwdLive []LiveStep
+		if gc.captureLiveSteps && gc.trace != nil {
+			fwdChain = fwdChain.WithObserver(g.liveStepObserver(false, &fwdLive))
+			revChain = revChain.WithObserver(g.liveStepObserver(true, &bwdLive))
+		}
 		var fwd, bwd, bwdHistory []interned.TokenID
 		var bwdErr error
 		if forwardOnly {
 			if fwdErr == nil {
-				fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
+				fwd, fwdErr = barkov.Gen(ctx, fwdChain, fwdOpts...)
 			}
 		} else {
-			bwdOpts, history, err := g.middleOptions(g.reverseChain, revSeed, revSeed, gc)
+			bwdOpts, history, err := g.middleOptions(revChain, revSeed, revSeed, gc)
 			bwdHistory = history
 			bwdErr = err
 			switch {
 			case fwdErr == nil && bwdErr == nil:
-				fwd, fwdErr, bwd, bwdErr = g.generateHalves(ctx, fwdOpts, bwdOpts)
+				fwd, fwdErr, bwd, bwdErr = g.generateHalvesOn(ctx, fwdChain, revChain, fwdOpts, bwdOpts)
 			case fwdErr == nil:
-				fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
+				fwd, fwdErr = barkov.Gen(ctx, fwdChain, fwdOpts...)
 			}
 		}
 		a := g.startAttempt(gc, fwd, fwdErr, bwd, bwdErr)
@@ -75,6 +81,9 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 				g.finishAttempt(gc, a, bwd, err)
 				if err == nil {
 					g.traceWalk(gc, walk, len(bwd)-len(seed))
+					if gc.captureLiveSteps && gc.trace != nil {
+						gc.trace.LiveSteps = append(slices.Clone(bwdLive), fwdLive...)
+					}
 					return g.vocab.DecodeTokens(bwd), nil
 				}
 				lastErr = err
@@ -94,6 +103,9 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			if err == nil {
 				g.finishAttempt(gc, a, spliced, nil)
 				g.traceWalk(gc, walk, len(bwd)-len(seed))
+				if gc.captureLiveSteps && gc.trace != nil {
+					gc.trace.LiveSteps = append(slices.Clone(bwdLive), fwdLive...)
+				}
 				return g.vocab.DecodeTokens(spliced), nil
 			}
 			if gc.spliceCheck {
@@ -108,6 +120,9 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 		g.finishAttempt(gc, a, fwd, lastErr)
 		if lastErr == nil {
 			g.traceWalk(gc, walk, 0)
+			if gc.captureLiveSteps && gc.trace != nil {
+				gc.trace.LiveSteps = fwdLive
+			}
 			return g.vocab.DecodeTokens(fwd), nil
 		}
 	}
@@ -179,16 +194,16 @@ func (g *Generator) validateResult(out []interned.TokenID, limit int) error {
 
 // generateHalves keeps a caller-owned RNG sequential. Every started half
 // finishes before the call returns, including cancellation and failures.
-func (g *Generator) generateHalves(ctx context.Context, forward, backward []barkov.GenOption[interned.TokenID]) (fwd []interned.TokenID, fwdErr error, bwd []interned.TokenID, bwdErr error) {
+func (g *Generator) generateHalvesOn(ctx context.Context, fwdChain, revChain interned.BackoffChain, forward, backward []barkov.GenOption[interned.TokenID]) (fwd []interned.TokenID, fwdErr error, bwd []interned.TokenID, bwdErr error) {
 	if g.fixedRNG {
-		fwd, fwdErr = barkov.Gen(ctx, g.chain, forward...)
-		bwd, bwdErr = barkov.Gen(ctx, g.reverseChain, backward...)
+		fwd, fwdErr = barkov.Gen(ctx, fwdChain, forward...)
+		bwd, bwdErr = barkov.Gen(ctx, revChain, backward...)
 		return
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); bwd, bwdErr = barkov.Gen(ctx, g.reverseChain, backward...) }()
-	fwd, fwdErr = barkov.Gen(ctx, g.chain, forward...)
+	go func() { defer wg.Done(); bwd, bwdErr = barkov.Gen(ctx, revChain, backward...) }()
+	fwd, fwdErr = barkov.Gen(ctx, fwdChain, forward...)
 	wg.Wait()
 	return
 }

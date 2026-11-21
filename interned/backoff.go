@@ -56,6 +56,9 @@ type BackoffChain interface {
 	// Options explains one step of the walk after window; see
 	// backoffCore.Options.
 	Options(window []TokenID) ([]OrderOptions, int)
+	// WithObserver returns a view sharing the same tables that reports live
+	// step decisions to fn (nil disables observation).
+	WithObserver(fn StepObserver) BackoffChain
 }
 
 // withDefaults validates cfg and fills zero values with defaults. Panics
@@ -154,6 +157,8 @@ type backoffCore struct {
 	// (1-ε)·ML(h) + ε·Q(suffix(h)), and every emitted transition is still
 	// observed at the order it came from.
 	escape float64
+	// observer, when non-nil, records live moveTail decisions for parity verification
+	observer StepObserver
 }
 
 // SetRNG overrides the random source used by the walk. Intended for
@@ -209,19 +214,48 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 		return b.moveEscape(window, sv, &probeBuf)
 	}
 	sawState, sawSupported := false, false
+	var lookups []LookupRecord
+	if b.observer != nil {
+		lookups = make([]LookupRecord, 0, b.cfg.MaxOrder-b.cfg.MinOrder+1)
+	}
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
 		tail := window[len(window)-m:]
 		idx, ok := b.tables[m-1].lookupTail(tail)
 		if !ok {
+			if b.observer != nil {
+				lookups = append(lookups, LookupRecord{Order: m, Status: LookupNoCorpusMatch})
+			}
 			continue
 		}
 		sawState = true
 		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
+			if b.observer != nil {
+				lookups = append(lookups, LookupRecord{Order: m, Status: LookupBelowMinSupport, SeenCount: uint32(idx.Obs)})
+			}
 			continue // thin evidence; a shorter order has more
 		}
 		sawSupported = true
 		if tok, ok := b.sample(m, idx, window, sv, &probeBuf); ok {
+			if b.observer != nil {
+				lookups = append(lookups, LookupRecord{Order: m, Status: LookupUsed, SeenCount: uint32(idx.Obs)})
+				for lower := m - 1; lower >= b.cfg.MinOrder; lower-- {
+					var obs uint32
+					if lidx, lok := b.tables[lower-1].lookupTail(window[len(window)-lower:]); lok {
+						obs = uint32(lidx.Obs)
+					}
+					lookups = append(lookups, LookupRecord{Order: lower, Status: LookupHigherOrderUsed, SeenCount: obs})
+				}
+				b.observer(StepRecord{
+					UsedOrder: m,
+					Picked:    tok,
+					End:       tok == b.sentinels.End,
+					Lookups:   lookups,
+				})
+			}
 			return tok, nil
+		}
+		if b.observer != nil {
+			lookups = append(lookups, LookupRecord{Order: m, Status: LookupAllOptionsCopyBlocked, SeenCount: uint32(idx.Obs)})
 		}
 		// All candidates at this order extend a verbatim run; back off.
 	}
