@@ -3,7 +3,6 @@ package interned
 import (
 	"fmt"
 	"iter"
-	"math/rand/v2"
 	"sort"
 	"sync"
 	"unsafe"
@@ -110,8 +109,8 @@ func (c *indexedCore[K]) lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool) 
 
 // slices implements orderTable.
 func (c *indexedCore[K]) slices(idx barkov.ChoicesIndex) ([]TokenID, []uint32) {
-	return c.Choices[idx.Offset : idx.Offset+uint32(idx.Count)],
-		c.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+	return c.Choices[idx.Offset : idx.Offset+idx.Count],
+		c.CumDist[idx.Offset : idx.Offset+idx.Count]
 }
 
 // states implements orderTable.
@@ -120,9 +119,9 @@ func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 		for k, idx := range c.Model.All() {
 			var total uint32
 			if idx.Count == 1 {
-				total = uint32(idx.Obs)
+				total = idx.Obs
 			} else {
-				total = c.CumDist[idx.Offset+uint32(idx.Count)-1]
+				total = c.CumDist[idx.Offset+idx.Count-1]
 			}
 			tokens := make([]TokenID, c.stateSize)
 			copy(tokens, unsafe.Slice((*TokenID)(unsafe.Pointer(&k)), c.stateSize))
@@ -140,11 +139,11 @@ func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 // is stateless (a pure function of the state window plus RNG), so a
 // built chain is safe for concurrent readers, except under SetRNG.
 type backoffCore struct {
+	random
 	tables    []orderTable // index m-1 = order m
 	cfg       BackoffConfig
 	sentinels barkov.Sentinels[TokenID]
 	encoder   PackedEncoder
-	rng       *rand.Rand
 	contexts  *contextIndex
 	// escape > 0 turns "longest context wins" into interpolated backoff:
 	// at each usable order above MinOrder the walk leaves for the next
@@ -155,10 +154,6 @@ type backoffCore struct {
 	// observed at the order it came from.
 	escape float64
 }
-
-// SetRNG overrides the random source used by the walk. Intended for
-// deterministic tests and benchmarks; not safe for concurrent use.
-func (b *backoffCore) SetRNG(r *rand.Rand) { b.rng = r }
 
 // States iterates all states at the given order (1..MaxOrder) with their
 // total observation count (total transitions observed from that state).
@@ -216,7 +211,7 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 			continue
 		}
 		sawState = true
-		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
+		if idx.Obs < uint32(b.cfg.MinSupport) {
 			continue // thin evidence; a shorter order has more
 		}
 		sawSupported = true
@@ -269,7 +264,7 @@ func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]To
 			continue
 		}
 		sawState = true
-		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
+		if idx.Obs < uint32(b.cfg.MinSupport) {
 			continue
 		}
 		sawSupported = true
@@ -368,14 +363,6 @@ func (b *backoffCore) escapeProbability(m int, idx barkov.ChoicesIndex) float64 
 		n = float64(cum[len(cum)-1])
 	}
 	return min(1, b.escape*t/(n+t))
-}
-
-// float64 draws from [0, 1) using the configured RNG.
-func (b *backoffCore) float64() float64 {
-	if b.rng != nil {
-		return b.rng.Float64()
-	}
-	return rand.Float64()
 }
 
 // runLongEnough reports whether the window's last MaxVerbatim-1 tokens
@@ -558,14 +545,6 @@ func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, s
 		}
 	}
 	return 0, false // unreachable: acc climbs to total > choiceNum
-}
-
-// uint32n draws from [0, n) using the configured RNG.
-func (b *backoffCore) uint32n(n uint32) uint32 {
-	if b.rng != nil {
-		return b.rng.Uint32N(n)
-	}
-	return rand.Uint32N(n)
 }
 
 // draw picks an index into a cumulative distribution by weight.

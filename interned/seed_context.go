@@ -2,7 +2,6 @@ package interned
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"sort"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -84,13 +83,7 @@ func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 	if total == 0 {
 		return nil, fmt.Errorf("barkov: seed contexts have insufficient support: %w", barkov.ErrInsufficientSupport)
 	}
-	var draw uint64
-	if b.rng != nil {
-		draw = b.rng.Uint64N(total)
-	} else {
-		draw = rand.Uint64N(total)
-	}
-	target := x.cumulative[lo] + draw
+	target := x.cumulative[lo] + b.uint64n(total)
 	i := lo + sort.Search(hi-lo, func(i int) bool { return x.cumulative[lo+i+1] > target })
 	return append([]TokenID(nil), x.row(i)[:x.order-len(seed)]...), nil
 }
@@ -100,7 +93,7 @@ func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 func (b *backoffCore) WithoutVerbatim() BackoffChain {
 	cfg := b.cfg
 	cfg.MaxVerbatim = -1
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts, escape: b.escape})
+	return wrapBackoff(&backoffCore{tables: b.tables, cfg: cfg, sentinels: b.sentinels, encoder: b.encoder, random: b.random, contexts: b.contexts, escape: b.escape})
 }
 
 // WithEscape shares immutable tables with the original chain while
@@ -109,5 +102,5 @@ func (b *backoffCore) WithEscape(scale float64) BackoffChain {
 	if scale < 0 {
 		scale = 0
 	}
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: b.cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts, escape: scale})
+	return wrapBackoff(&backoffCore{tables: b.tables, cfg: b.cfg, sentinels: b.sentinels, encoder: b.encoder, random: b.random, contexts: b.contexts, escape: scale})
 }
