@@ -19,7 +19,8 @@ var scratchPool = sync.Pool{
 	},
 }
 
-// HashNGramSet is a hash-keyed anti-verbatim validator.
+// HashNGramSet is a hash-keyed anti-verbatim validator. Hash collisions can
+// rarely reject a novel gram (about 1 in 2^64 per entry).
 type HashNGramSet[T comparable] struct {
 	hashes    map[uint64]struct{}
 	n         int
