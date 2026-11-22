@@ -3,7 +3,8 @@ package barkov
 import "strings"
 
 // StateEncoder turns a token window into a map key and back. Encode must be
-// deterministic and injective, and Decode(Encode(x)) must equal x.
+// deterministic and injective, Decode(Encode(x)) must equal x, and Encode's
+// result is kept as a map key so it must not alias a reused buffer.
 type StateEncoder[T comparable] interface {
 	Encode(tokens []T) string
 	Decode(state string) []T

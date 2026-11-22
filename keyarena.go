@@ -39,7 +39,8 @@ func (a *keyArena) Append(b []byte) string {
 }
 
 // keyStream encodes windows into map keys for corpus scans. A probe key is
-// only valid until the next probe, and intern copies it into the arena to keep it.
+// only valid until the next probe, so intern must directly follow the probe
+// whose key it keeps.
 type keyStream[T comparable] struct {
 	appendEnc AppendEncoder[T]
 	encoder   StateEncoder[T]
