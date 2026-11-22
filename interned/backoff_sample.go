@@ -9,10 +9,10 @@ import (
 // sample draws a follower from the order-m state idx. Under steering,
 // vetoed candidates are dropped and the rest keep their weights; ok=false
 // means every candidate was vetoed.
-func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, bool) {
+func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, key contextKey, sv steerView) (TokenID, bool) {
 	if idx.Count == 1 {
 		tok := TokenID(idx.Offset)
-		if sv.mode != steerOff && b.filtered(sv, window, tok, probeBuf) {
+		if sv.mode != steerOff && b.filtered(sv, key, tok) {
 			return 0, false
 		}
 		return tok, true
@@ -22,21 +22,21 @@ func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, s
 	case steerOff:
 		return choices[b.draw(cum)], true
 	case steerBig:
-		return b.sampleReservoir(choices, cum, window, sv, probeBuf)
+		return b.sampleReservoir(choices, cum, key, sv)
 	default:
-		return b.sampleTwoPass(choices, cum, window, sv, probeBuf)
+		return b.sampleTwoPass(choices, cum, key, sv)
 	}
 }
 
 // sampleReservoir keeps a weighted reservoir so each costly table probe runs
 // once: every survivor replaces the pick with probability weight/totalSoFar
-func (b *backoffCore) sampleReservoir(choices []TokenID, cum []uint32, window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, bool) {
+func (b *backoffCore) sampleReservoir(choices []TokenID, cum []uint32, key contextKey, sv steerView) (TokenID, bool) {
 	var pick TokenID
 	var total, prev uint32
 	for i, tok := range choices {
 		w := cum[i] - prev
 		prev = cum[i]
-		if b.filtered(sv, window, tok, probeBuf) {
+		if b.filtered(sv, key, tok) {
 			continue
 		}
 		total += w
@@ -49,12 +49,12 @@ func (b *backoffCore) sampleReservoir(choices []TokenID, cum []uint32, window []
 
 // sampleTwoPass totals the survivors' weights and then walks to one draw,
 // which needs one RNG call instead of one per survivor
-func (b *backoffCore) sampleTwoPass(choices []TokenID, cum []uint32, window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, bool) {
+func (b *backoffCore) sampleTwoPass(choices []TokenID, cum []uint32, key contextKey, sv steerView) (TokenID, bool) {
 	var total, prev uint32
 	for i, tok := range choices {
 		w := cum[i] - prev
 		prev = cum[i]
-		if !b.filtered(sv, window, tok, probeBuf) {
+		if !b.filtered(sv, key, tok) {
 			total += w
 		}
 	}
@@ -67,7 +67,7 @@ func (b *backoffCore) sampleTwoPass(choices []TokenID, cum []uint32, window []To
 	for i, tok := range choices {
 		w := cum[i] - prev
 		prev = cum[i]
-		if b.filtered(sv, window, tok, probeBuf) {
+		if b.filtered(sv, key, tok) {
 			continue
 		}
 		if acc += w; acc > choiceNum {

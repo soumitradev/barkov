@@ -20,16 +20,16 @@ type OrderOptions struct {
 // longest supported one with a follower steering allows, or 0 when none has.
 // It describes the longest-context walk, not one under WithEscape.
 func (b *backoffCore) Options(window []TokenID) ([]OrderOptions, int) {
+	key := keyOf(window[len(window)-b.cfg.MaxOrder:])
 	var sv steerView
-	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(window) {
-		sv = b.steerSnapshot(window)
+	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(key) {
+		sv = b.steerSnapshot(key)
 	}
-	var probeBuf [8]TokenID
 	used := 0
 	orders := make([]OrderOptions, 0, b.cfg.MaxOrder-b.cfg.MinOrder+1)
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
 		o := OrderOptions{Order: m}
-		idx, ok := b.tables[m-1].lookupTail(window[len(window)-m:])
+		idx, ok := b.tables[m-1].lookup(key)
 		if ok {
 			o.Found = true
 			if idx.Count == 1 {
@@ -48,7 +48,7 @@ func (b *backoffCore) Options(window []TokenID) ([]OrderOptions, int) {
 			o.Steered = make([]bool, len(o.Followers))
 			allowed := false
 			for i, tok := range o.Followers {
-				o.Steered[i] = sv.mode != steerOff && b.filtered(sv, window, tok, &probeBuf)
+				o.Steered[i] = sv.mode != steerOff && b.filtered(sv, key, tok)
 				allowed = allowed || !o.Steered[i]
 			}
 			if used == 0 && o.Supported && allowed {

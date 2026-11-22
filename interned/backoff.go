@@ -31,10 +31,29 @@ type BackoffChain interface {
 	Options(window []TokenID) ([]OrderOptions, int)
 }
 
+// contextKey holds up to 8 context tokens right-aligned, so the order-m
+// table reads its last m tokens and one key serves every order. Passing it
+// by value through orderTable keeps it on the stack, where a slice would escape.
+type contextKey [8]TokenID
+
+// keyOf right-aligns up to 8 tokens into a contextKey
+func keyOf(tokens []TokenID) contextKey {
+	var key contextKey
+	copy(key[len(key)-len(tokens):], tokens)
+	return key
+}
+
+// shift drops the oldest token and appends tok
+func (key contextKey) shift(tok TokenID) contextKey {
+	copy(key[:], key[1:])
+	key[len(key)-1] = tok
+	return key
+}
+
 // orderTable is one per-order indexedCore, whatever its key size
 type orderTable interface {
-	// lookupTail needs exactly the table's stateSize tokens
-	lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool)
+	// lookup reads the table's stateSize tokens at the end of key
+	lookup(key contextKey) (barkov.ChoicesIndex, bool)
 	// slices resolves a Count>1 index to its followers and cumulative weights
 	slices(idx barkov.ChoicesIndex) (choices []TokenID, cum []uint32)
 	states() iter.Seq2[[]TokenID, uint32]
@@ -43,8 +62,8 @@ type orderTable interface {
 	snapshotStateCount() int
 }
 
-func (c *indexedCore[K]) lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool) {
-	return c.Model.Get(*(*K)(unsafe.Pointer(&tail[0])))
+func (c *indexedCore[K]) lookup(key contextKey) (barkov.ChoicesIndex, bool) {
+	return c.Model.Get(*(*K)(unsafe.Pointer(&key[len(key)-c.stateSize])))
 }
 
 func (c *indexedCore[K]) slices(idx barkov.ChoicesIndex) ([]TokenID, []uint32) {
@@ -105,19 +124,17 @@ func (b *backoffCore) Move(state string) (TokenID, error) {
 // moveTail picks the next token after window. When steering vetoes every
 // candidate at an order, the next shorter order offers a wider set.
 func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
+	key := keyOf(window[len(window)-b.cfg.MaxOrder:])
 	var sv steerView
-	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(window) {
-		sv = b.steerSnapshot(window)
+	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(key) {
+		sv = b.steerSnapshot(key)
 	}
-	// Shared by every candidate probe, since a buffer passed through the
-	// orderTable interface escapes to the heap
-	var probeBuf [8]TokenID
 	if b.escape > 0 {
-		return b.moveEscape(window, sv, &probeBuf)
+		return b.moveEscape(key, sv)
 	}
 	failure := noContext
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
-		idx, ok := b.tables[m-1].lookupTail(window[len(window)-m:])
+		idx, ok := b.tables[m-1].lookup(key)
 		if !ok {
 			continue
 		}
@@ -126,7 +143,7 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 			continue
 		}
 		failure = allSteered
-		if tok, ok := b.sample(m, idx, window, sv, &probeBuf); ok {
+		if tok, ok := b.sample(m, idx, key, sv); ok {
 			return tok, nil
 		}
 	}
@@ -161,6 +178,6 @@ func (b *backoffCore) IsFragment(tokens []TokenID) bool {
 	if len(tokens) == 0 || len(tokens) > b.cfg.MaxOrder {
 		return false
 	}
-	_, ok := b.tables[len(tokens)-1].lookupTail(tokens)
+	_, ok := b.tables[len(tokens)-1].lookup(keyOf(tokens))
 	return ok
 }

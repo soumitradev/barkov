@@ -51,7 +51,7 @@ func readContextSnapshot(d *snapshotDecoder, table orderTable, cfg BackoffConfig
 	for i := 0; i < x.Len() && d.err == nil; i++ {
 		row := x.row(i)
 		count := uint32(x.rows[i*width+cfg.MinOrder])
-		idx, ok := table.lookupTail(row)
+		idx, ok := table.lookup(keyOf(row))
 		if !ok || idx.Obs != count || (i > 0 && !x.Less(i-1, i)) {
 			d.fail("invalid seed context row or order")
 			break
