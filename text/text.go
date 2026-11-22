@@ -25,7 +25,7 @@ type Generator struct {
 	fixedRNG       bool
 	unknownContext interned.TokenID // absent from the immutable trained vocabulary
 
-	// Whole-message digests catch short verbatim outputs; nil when anti-verbatim is off
+	// Whole-message digests catch short verbatim outputs, or nil when anti-verbatim is off
 	messages *interned.MessageSet
 }
 
@@ -122,7 +122,7 @@ func (g *Generator) minOrder() int {
 	return (interned.ModelSnapshot{Forward: g.chain}).Config().MinOrder
 }
 
-// SetRNG sets a deterministic random source on both chains; not concurrency-safe.
+// SetRNG sets a deterministic random source on both chains. Not concurrency-safe.
 func (g *Generator) SetRNG(r *rand.Rand) {
 	g.fixedRNG = r != nil
 	g.chain.SetRNG(r)

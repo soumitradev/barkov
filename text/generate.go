@@ -47,7 +47,7 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 	return fallback.generate(ctx, &gc, true)
 }
 
-// withWalk returns a shallow copy with per-call chain views; tables stay shared.
+// withWalk returns a shallow copy with per-call chain views sharing the same tables.
 func (g *Generator) withWalk(gc *genConfig) *Generator {
 	if gc.escape <= 0 && !gc.noSteering {
 		return g

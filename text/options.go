@@ -40,11 +40,12 @@ func MinOrder(n int) Option { return func(c *config) { c.minOrder = n } }
 // (default 1, range 1..65535). Applies to every order including MinOrder.
 func MinSupport(n int) Option { return func(c *config) { c.minSupport = n } }
 
-// Timeout sets the per-Generate time budget (default 10s; 0 adds no timeout).
+// Timeout sets the per-Generate time budget (default 10s, 0 adds no timeout).
 func Timeout(d time.Duration) Option { return func(c *config) { c.timeout = d } }
 
 // Retries sets generation attempts per Generate call before returning the last
-// validation failure (default 64). With Threads(t), each retry fans out t workers.
+// validation failure (default 64). With Threads(t), each retry fans out t
+// workers for up to Retries * t attempts.
 func Retries(n int) Option { return func(c *config) { c.retries = n } }
 
 // Threads fans each attempt out across n goroutines (default 0, sequential).
@@ -60,14 +61,15 @@ func AntiVerbatim(n int) Option {
 	}
 }
 
-// MaxTokens caps generated token length (0 means unlimited); longer attempts retry.
+// MaxTokens caps generated token length (0 means unlimited). Longer attempts retry.
 func MaxTokens(n int) Option { return func(c *config) { c.maxTokens = n } }
 
 // Bidirectional builds a reverse engine too, enabling SeedMiddle.
 func Bidirectional() Option { return func(c *config) { c.bidirectional = true } }
 
-// RNG fixes the random source for deterministic output. A fixed RNG is not
-// safe for concurrent Generate calls or Threads > 1.
+// RNG fixes the random source for deterministic output. Middle-out generation
+// uses the RNG sequentially for reproducible results. A fixed RNG is not safe
+// for concurrent Generate calls or Threads > 1.
 func RNG(r *rand.Rand) Option { return func(c *config) { c.rng = r } }
 
 // GenOption configures a single Generate call.
@@ -111,13 +113,13 @@ func (c generationConfig) validate(fixedRNG bool) error {
 }
 
 // Seed starts generation from words found in the vocabulary (exact, then
-// lowercased); if none match, generation runs unseeded.
+// lowercased). If none match, generation runs unseeded.
 func Seed(words []string) GenOption {
 	return func(gc *genConfig) { gc.seed = words }
 }
 
 // SeedMiddle generates around words using Bidirectional(). Output must continue
-// past the seed (unless WithSeedEnding is set); a backward-only attempt switches
+// past the seed (unless WithSeedEnding is set). A backward-only attempt switches
 // remaining retries to forward-only. All-unknown seeds fall back to unseeded.
 func SeedMiddle(words []string) GenOption {
 	return func(gc *genConfig) { gc.seedMiddle = words }
@@ -128,12 +130,12 @@ func WithMaxTokens(n int) GenOption {
 	return func(gc *genConfig) { gc.maxTokens = n }
 }
 
-// WithTimeout overrides Timeout for this call.
+// WithTimeout overrides Timeout for this call. d must be nonnegative.
 func WithTimeout(d time.Duration) GenOption {
 	return func(gc *genConfig) { gc.timeout = d }
 }
 
-// WithRetries overrides Retries for this call.
+// WithRetries overrides Retries for this call. n must be positive.
 func WithRetries(n int) GenOption {
 	return func(gc *genConfig) { gc.retries = n }
 }
@@ -151,7 +153,7 @@ func WithVerbatimFallback() GenOption {
 
 // WithEscape backs off to the next shorter context with probability
 // scale*T/(N+T) (PPM method C, T distinct followers, N observations).
-// Scale 0 keeps longest-context sampling.
+// Scale 0 keeps longest-context sampling. MinOrder still applies.
 func WithEscape(scale float64) GenOption {
 	return func(gc *genConfig) { gc.escape = scale }
 }

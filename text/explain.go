@@ -16,16 +16,16 @@ const (
 
 // Walk describes how tokens were walked so Explain can rebuild each step's context.
 type Walk struct {
-	Seed, SeedLen   int // seed position and length; 0 means unseeded
-	Middle          bool
-	Backward        bool
+	Seed, SeedLen   int      // seed position and length (0 means unseeded)
+	Middle          bool     // walk started from unknown history before a mid-sentence seed
+	Backward        bool     // tokens before the seed were walked backwards
 	HiddenSeed      int      // leading seed tokens excluded from the starting context
 	History         []string // sampled history before a short seed, in message order
 	BackwardHistory []string // sampled history after a short seed, in message order
-	Unsteered       bool
+	Unsteered       bool     // copy steering was off for this walk
 }
 
-// Choice is one follower a context offers; End marks message end (or start when backward).
+// Choice is one follower a context offers. End marks message end (or start when backward).
 type Choice struct {
 	Token   string
 	End     bool
