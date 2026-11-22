@@ -28,6 +28,7 @@ type Chain[T comparable] struct {
 	sentinels Sentinels[T]
 	encoder   StateEncoder[T]
 
+	beginKey     string
 	beginChoices []T
 	beginCumDist []uint32
 }
@@ -96,10 +97,14 @@ func (c *Chain[T]) padRun(dst, begin, run []T) []T {
 }
 
 func (c *Chain[T]) precomputeBeginState() {
-	key := c.encoder.Encode(c.beginWindow())
-	if choices, ok := c.Model[key]; ok {
-		c.beginChoices, c.beginCumDist = calculateCumDist(choices)
+	c.beginKey = c.encoder.Encode(c.beginWindow())
+	choices := c.Model[c.beginKey]
+	if len(choices) == 0 {
+		c.beginChoices = nil
+		c.beginCumDist = nil
+		return
 	}
+	c.beginChoices, c.beginCumDist = calculateCumDist(choices)
 }
 
 func (c *Chain[T]) StateSize() int           { return c.stateSize }
@@ -113,7 +118,7 @@ func (c *Chain[T]) Move(state string) (T, error) {
 		var zero T
 		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
 	}
-	if state == c.encoder.Encode(c.beginWindow()) && len(c.beginChoices) > 0 {
+	if state == c.beginKey && len(c.beginChoices) > 0 {
 		return c.beginChoices[chooseToken32(c.beginCumDist)], nil
 	}
 
