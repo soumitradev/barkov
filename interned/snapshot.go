@@ -24,6 +24,8 @@ var ErrInvalidSnapshot = errors.New("barkov: invalid model snapshot")
 
 var snapshotCRC = crc32.MakeTable(crc32.Castagnoli)
 
+const maxSnapshotTokenBytes = 1 << 20
+
 // WriteTo streams versioned, checksummed model tables without copying the corpus.
 // The format is independent of Go's struct layout; message hashes require the
 // same native byte order on save and load. Unknown versions are rejected.
@@ -49,7 +51,7 @@ func (s ModelSnapshot) WriteTo(w io.Writer) (int64, error) {
 	e.bytes(snapshotMagic())
 	e.u32(uint32(s.Vocabulary.Size()))
 	for _, token := range s.Vocabulary.idToToken {
-		if uint64(len(token)) > 1<<20 {
+		if uint64(len(token)) > maxSnapshotTokenBytes {
 			return counted.n, fmt.Errorf("%w: token exceeds 1 MiB", ErrInvalidSnapshot)
 		}
 		e.u32(uint32(len(token)))
@@ -95,88 +97,35 @@ func ReadModelSnapshot(r io.Reader) (ModelSnapshot, error) {
 		return ModelSnapshot{}, err
 	}
 	d := snapshotDecoder{r: bufio.NewReaderSize(r, 64<<10), hash: h, remaining: remaining}
-	var s ModelSnapshot
 	var magic [8]byte
 	d.bytes(magic[:])
 	if d.err != nil {
-		return s, d.err
+		return ModelSnapshot{}, d.err
 	}
 	if !slices.Equal(magic[:], snapshotMagic()) {
-		return s, fmt.Errorf("%w: unsupported format version or byte order", ErrInvalidSnapshot)
+		return ModelSnapshot{}, fmt.Errorf("%w: unsupported format version or byte order", ErrInvalidSnapshot)
 	}
-	n := d.u32()
-	if n < 2 || n == 1<<32-1 {
-		d.fail("vocabulary needs both sentinels")
-	}
-	if !d.checkSize(uint64(n) * 4) {
-		return s, d.err
-	}
-	v := &Vocabulary{tokenToID: make(map[string]TokenID)}
-	for i := uint32(0); i < n && d.err == nil; i++ {
-		size := d.u32()
-		if size > 1<<20 {
-			d.fail("token exceeds 1 MiB")
-			break
-		}
-		if !d.checkSize(uint64(size)) {
-			break
-		}
-		buf := make([]byte, size)
-		d.bytes(buf)
-		token := string(buf)
-		if _, exists := v.tokenToID[token]; exists {
-			d.fail("duplicate vocabulary token")
-			break
-		}
-		v.idToToken = append(v.idToToken, token)
-		v.tokenToID[token] = TokenID(i)
-	}
-	if d.err == nil && (v.Token(BeginTokenID) != barkov.BEGIN || v.Token(EndTokenID) != barkov.END) {
-		d.fail("invalid vocabulary sentinels")
-	}
-	cfg := BackoffConfig{MaxOrder: int(d.u32()), MinOrder: int(d.u32()), MinSupport: int(d.u32()), MaxVerbatim: int(int32(d.u32()))}
-	if cfg.MaxOrder < 2 || cfg.MaxOrder > 8 || cfg.MinOrder < 1 || cfg.MinOrder > cfg.MaxOrder || cfg.MinSupport < 1 || cfg.MinSupport > 65535 || (cfg.MaxVerbatim != -1 && (cfg.MaxVerbatim < 2 || cfg.MaxVerbatim > cfg.MaxOrder)) {
-		d.fail("invalid backoff configuration")
-	}
-	reverse := d.u32()
-	if reverse > 1 {
-		d.fail("invalid reverse-chain flag")
-	}
+	v, n := readVocabulary(&d)
+	cfg, hasReverse := readConfig(&d)
 	if d.err != nil {
-		return s, d.err
+		return ModelSnapshot{}, d.err
 	}
-	s.Vocabulary = v
+	s := ModelSnapshot{Vocabulary: v}
 	var sections *sectionReader
 	var forward, backward *backoffCore
 	if d.remaining >= 0 {
 		sections = newSectionReader(&d)
 		forward = sections.readBackoffSections(cfg, n)
-		if reverse != 0 && d.err == nil {
+		if hasReverse && d.err == nil {
 			backward = sections.readBackoffSections(cfg, n)
 		}
 	} else {
 		s.Forward = readBackoff(&d, cfg, n)
-		if reverse != 0 {
+		if hasReverse {
 			s.Reverse = readBackoff(&d, cfg, n)
 		}
 	}
-	count := d.u32()
-	if cfg.MaxVerbatim < 0 && count != 0 {
-		d.fail("message digests with copy prevention disabled")
-	}
-	if cfg.MaxVerbatim > 0 {
-		s.Messages = NewMessageSet(nil)
-		for i := uint32(0); i < count && d.err == nil; i++ {
-			digest := d.u64()
-			if _, exists := s.Messages.digests[digest]; exists {
-				d.fail("duplicate message digest")
-			}
-			s.Messages.digests[digest] = struct{}{}
-		}
-		if count == 0 {
-			d.fail("missing whole-message digests")
-		}
-	}
+	s.Messages = readDigests(&d, cfg.MaxVerbatim)
 	checksum := h.Sum32()
 	d.hash = nil
 	if want := d.u32(); d.err == nil && checksum != want {
@@ -204,6 +153,83 @@ func ReadModelSnapshot(r io.Reader) (ModelSnapshot, error) {
 		return ModelSnapshot{}, fmt.Errorf("%w: trailing read error: %w", ErrInvalidSnapshot, err)
 	}
 	return s, nil
+}
+
+func readVocabulary(d *snapshotDecoder) (*Vocabulary, uint32) {
+	n := d.u32()
+	if n < 2 || n == 1<<32-1 {
+		d.fail("vocabulary needs both sentinels")
+	}
+	if !d.checkSize(uint64(n) * 4) {
+		return nil, 0
+	}
+	v := &Vocabulary{tokenToID: make(map[string]TokenID)}
+	for i := uint32(0); i < n && d.err == nil; i++ {
+		size := d.u32()
+		if size > maxSnapshotTokenBytes {
+			d.fail("token exceeds 1 MiB")
+			break
+		}
+		if !d.checkSize(uint64(size)) {
+			break
+		}
+		buf := make([]byte, size)
+		d.bytes(buf)
+		if d.err != nil {
+			break
+		}
+		token := string(buf)
+		if _, exists := v.tokenToID[token]; exists {
+			d.fail("duplicate vocabulary token")
+			break
+		}
+		v.idToToken = append(v.idToToken, token)
+		v.tokenToID[token] = TokenID(i)
+	}
+	if d.err == nil && (v.Token(BeginTokenID) != barkov.BEGIN || v.Token(EndTokenID) != barkov.END) {
+		d.fail("invalid vocabulary sentinels")
+	}
+	return v, n
+}
+
+func readConfig(d *snapshotDecoder) (BackoffConfig, bool) {
+	cfg := BackoffConfig{
+		MaxOrder:    int(d.u32()),
+		MinOrder:    int(d.u32()),
+		MinSupport:  int(d.u32()),
+		MaxVerbatim: int(int32(d.u32())),
+	}
+	if cfg.validate() != nil {
+		d.fail("invalid backoff configuration")
+	}
+	reverse := d.u32()
+	if reverse > 1 {
+		d.fail("invalid reverse-chain flag")
+	}
+	return cfg, reverse != 0
+}
+
+func readDigests(d *snapshotDecoder, maxVerbatim int) *MessageSet {
+	count := d.u32()
+	if maxVerbatim < 0 && count != 0 {
+		d.fail("message digests with copy prevention disabled")
+		return nil
+	}
+	if maxVerbatim <= 0 {
+		return nil
+	}
+	ms := NewMessageSet(nil)
+	for i := uint32(0); i < count && d.err == nil; i++ {
+		digest := d.u64()
+		if _, exists := ms.digests[digest]; exists {
+			d.fail("duplicate message digest")
+		}
+		ms.digests[digest] = struct{}{}
+	}
+	if count == 0 {
+		d.fail("missing whole-message digests")
+	}
+	return ms
 }
 
 func snapshotMagic() []byte {

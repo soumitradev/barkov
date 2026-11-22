@@ -15,7 +15,7 @@ import (
 func modelFixture() ModelSnapshot {
 	v := NewVocabulary()
 	corpus := v.InternCorpus([][]string{{"one", "two", "three"}, {"one", "four", "five"}, {"one", "two", "three"}})
-	return ModelSnapshot{Vocabulary: v, Forward: BuildBackoff(BackoffConfig{MaxOrder: 2, MaxVerbatim: -1}, corpus).(BackoffChain)}
+	return ModelSnapshot{Vocabulary: v, Forward: BuildBackoff(BackoffConfig{MaxOrder: 2, MaxVerbatim: -1}, corpus)}
 }
 
 func TestSnapshotRejectsInvalidTables(t *testing.T) {

@@ -7,7 +7,16 @@ import (
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-const snapshotBlockRows = 1024
+const (
+	snapshotBlockRows = 1024
+	choiceRecordBytes = 8  // token + cumulative weight
+	tableMetaFields   = 4  // slot + offset + count + obs
+	tableHeaderBytes  = 20 // n + choices + capacity + seed
+	maxTableStates    = 1 << 29
+	minTableCapacity  = 16
+	maxTableCapacity  = 1 << 30
+	streamInitialCap  = 4096
+)
 
 func (b *backoffCore) writeTables(e *snapshotEncoder) {
 	for _, table := range b.tables {
@@ -27,12 +36,12 @@ func (c *indexedCore[K]) writeTable(e *snapshotEncoder) {
 	e.u32(uint32(len(c.Choices)))
 	e.u32(uint32(len(table.entries)))
 	e.u64(table.seed)
-	width := (c.stateSize + 4) * 4
+	width := (c.stateSize + tableMetaFields) * 4
 	block := make([]byte, 0, snapshotBlockRows*width)
 	for i, token := range c.Choices {
 		block = binary.LittleEndian.AppendUint32(block, uint32(token))
 		block = binary.LittleEndian.AppendUint32(block, c.CumDist[i])
-		if len(block) >= snapshotBlockRows*8 {
+		if len(block) >= snapshotBlockRows*choiceRecordBytes {
 			e.bytes(block)
 			block = block[:0]
 		}
@@ -105,87 +114,40 @@ func readOrderTable(d *snapshotDecoder, order int, vocab uint32) orderTable {
 func readTable[K comparable](d *snapshotDecoder, vocab uint32) *indexedCore[K] {
 	var zero K
 	stateSize := int(unsafe.Sizeof(zero)) / 4
-	width := (stateSize + 4) * 4
+	width := (stateSize + tableMetaFields) * 4
 	n, choices, capacity := d.u32(), d.u32(), d.u32()
 	seed := d.u64()
-	if n == 0 || n > 1<<29 || capacity < 16 || capacity > 1<<30 || capacity&(capacity-1) != 0 || uint64(capacity) > max(16, uint64(n)*4) || n > capacity*loadFactorNum/loadFactorDen {
-		d.fail("unsupported state table geometry")
-	}
-	if !d.checkSize(uint64(n)*uint64(width) + uint64(choices)*8) {
+	checkTableGeometry(d, n, capacity)
+	if !d.checkSize(uint64(n)*uint64(width) + uint64(choices)*choiceRecordBytes) {
 		return nil
 	}
+	sized := d.remaining >= 0
 	choiceCapacity := int(choices)
 	var table *stateMap[K, barkov.ChoicesIndex]
-	if d.remaining < 0 {
-		table = newStateMap[K, barkov.ChoicesIndex](min(int(n), 4096))
-		choiceCapacity = min(choiceCapacity, 4096)
+	if sized {
+		table = &stateMap[K, barkov.ChoicesIndex]{
+			entries: make([]stateEntry[K, barkov.ChoicesIndex], capacity),
+			mask:    capacity - 1,
+			growAt:  capacity * loadFactorNum / loadFactorDen,
+			seed:    seed,
+		}
 	} else {
-		table = &stateMap[K, barkov.ChoicesIndex]{entries: make([]stateEntry[K, barkov.ChoicesIndex], capacity), mask: capacity - 1, growAt: capacity * loadFactorNum / loadFactorDen, seed: seed}
+		table = newStateMap[K, barkov.ChoicesIndex](min(int(n), streamInitialCap))
+		choiceCapacity = min(choiceCapacity, streamInitialCap)
 	}
-	c := &indexedCore[K]{Model: table, stateSize: stateSize, sentinels: DefaultSentinels(), Choices: make([]TokenID, 0, choiceCapacity), CumDist: make([]uint32, 0, choiceCapacity)}
+	c := &indexedCore[K]{
+		Model:     table,
+		stateSize: stateSize,
+		sentinels: DefaultSentinels(),
+		Choices:   make([]TokenID, 0, choiceCapacity),
+		CumDist:   make([]uint32, 0, choiceCapacity),
+	}
 	block := make([]byte, snapshotBlockRows*width)
-	for remaining := choices; remaining > 0 && d.err == nil; {
-		rows := min(remaining, snapshotBlockRows)
-		d.bytes(block[:rows*8])
-		if d.err != nil {
-			break
-		}
-		for i := uint32(0); i < rows; i++ {
-			token, count := binary.LittleEndian.Uint32(block[i*8:]), binary.LittleEndian.Uint32(block[i*8+4:])
-			if token >= vocab || count == 0 {
-				d.fail("invalid transition")
-				break
-			}
-			c.Choices = append(c.Choices, TokenID(token))
-			c.CumDist = append(c.CumDist, count)
-		}
-		remaining -= rows
-	}
-	var previousSlot uint32
-	haveSlot := false
-	for remaining := n; remaining > 0 && d.err == nil; {
-		rows := min(int(remaining), snapshotBlockRows)
-		d.bytes(block[:rows*width])
-		if d.err != nil {
-			break
-		}
-		for i := range rows {
-			record := block[i*width : (i+1)*width]
-			slot := binary.LittleEndian.Uint32(record)
-			if slot >= capacity || (haveSlot && slot <= previousSlot) {
-				d.fail("invalid or repeated table slot")
-				break
-			}
-			previousSlot, haveSlot = slot, true
-			record = record[4:]
-			var key K
-			tokens := unsafe.Slice((*TokenID)(unsafe.Pointer(&key)), stateSize)
-			for j := range stateSize {
-				tokens[j] = TokenID(binary.LittleEndian.Uint32(record[j*4:]))
-				if uint32(tokens[j]) >= vocab {
-					d.fail("state token outside vocabulary")
-				}
-			}
-			fields := record[stateSize*4:]
-			idx := barkov.ChoicesIndex{Offset: binary.LittleEndian.Uint32(fields), Count: binary.LittleEndian.Uint32(fields[4:]), Obs: binary.LittleEndian.Uint32(fields[8:])}
-			validateIndex(d, idx, vocab, c.CumDist)
-			if d.err != nil {
-				break
-			}
-			if d.remaining < 0 {
-				if _, exists := c.Model.GetOrSet(key, idx); exists {
-					d.fail("duplicate state")
-					break
-				}
-			} else {
-				c.Model.entries[slot] = stateEntry[K, barkov.ChoicesIndex]{key: key, val: idx}
-				c.Model.count++
-			}
-		}
-		remaining -= uint32(rows)
-	}
-	if d.err == nil && d.remaining >= 0 {
-		validateSnapshotSlots(d, c.Model)
+	readChoices(d, c, choices, vocab, block)
+	if sized {
+		readSizedStates(d, c, n, capacity, vocab, width, block)
+	} else {
+		readStreamStates(d, c, n, capacity, vocab, width, block)
 	}
 	if d.err == nil {
 		if _, exists := c.Model.Get(zero); !exists {
@@ -193,6 +155,109 @@ func readTable[K comparable](d *snapshotDecoder, vocab uint32) *indexedCore[K] {
 		}
 	}
 	return c
+}
+
+func checkTableGeometry(d *snapshotDecoder, n, capacity uint32) {
+	if n == 0 || n > maxTableStates || capacity < minTableCapacity || capacity > maxTableCapacity ||
+		capacity&(capacity-1) != 0 || uint64(capacity) > max(minTableCapacity, uint64(n)*4) ||
+		n > capacity*loadFactorNum/loadFactorDen {
+		d.fail("unsupported state table geometry")
+	}
+}
+
+func readChoices[K comparable](d *snapshotDecoder, c *indexedCore[K], choices, vocab uint32, block []byte) {
+	for remaining := choices; remaining > 0 && d.err == nil; {
+		rows := min(remaining, snapshotBlockRows)
+		d.bytes(block[:rows*choiceRecordBytes])
+		if d.err != nil {
+			return
+		}
+		for i := uint32(0); i < rows; i++ {
+			off := i * choiceRecordBytes
+			token := binary.LittleEndian.Uint32(block[off:])
+			count := binary.LittleEndian.Uint32(block[off+4:])
+			if token >= vocab || count == 0 {
+				d.fail("invalid transition")
+				return
+			}
+			c.Choices = append(c.Choices, TokenID(token))
+			c.CumDist = append(c.CumDist, count)
+		}
+		remaining -= rows
+	}
+}
+
+func readSizedStates[K comparable](d *snapshotDecoder, c *indexedCore[K], n, capacity, vocab uint32, width int, block []byte) {
+	var previousSlot uint32
+	haveSlot := false
+	for remaining := n; remaining > 0 && d.err == nil; {
+		rows := min(int(remaining), snapshotBlockRows)
+		d.bytes(block[:rows*width])
+		if d.err != nil {
+			return
+		}
+		for i := range rows {
+			slot, key, idx := decodeStateRecord[K](d, block[i*width:(i+1)*width], c.stateSize, capacity, vocab, c.CumDist, &previousSlot, &haveSlot)
+			if d.err != nil {
+				return
+			}
+			c.Model.entries[slot] = stateEntry[K, barkov.ChoicesIndex]{key: key, val: idx}
+			c.Model.count++
+		}
+		remaining -= uint32(rows)
+	}
+	if d.err == nil {
+		validateSnapshotSlots(d, c.Model)
+	}
+}
+
+func readStreamStates[K comparable](d *snapshotDecoder, c *indexedCore[K], n, capacity, vocab uint32, width int, block []byte) {
+	var previousSlot uint32
+	haveSlot := false
+	for remaining := n; remaining > 0 && d.err == nil; {
+		rows := min(int(remaining), snapshotBlockRows)
+		d.bytes(block[:rows*width])
+		if d.err != nil {
+			return
+		}
+		for i := range rows {
+			_, key, idx := decodeStateRecord[K](d, block[i*width:(i+1)*width], c.stateSize, capacity, vocab, c.CumDist, &previousSlot, &haveSlot)
+			if d.err != nil {
+				return
+			}
+			if _, exists := c.Model.GetOrSet(key, idx); exists {
+				d.fail("duplicate state")
+				return
+			}
+		}
+		remaining -= uint32(rows)
+	}
+}
+
+func decodeStateRecord[K comparable](d *snapshotDecoder, record []byte, stateSize int, capacity, vocab uint32, weights []uint32, previousSlot *uint32, haveSlot *bool) (uint32, K, barkov.ChoicesIndex) {
+	var key K
+	slot := binary.LittleEndian.Uint32(record)
+	if slot >= capacity || (*haveSlot && slot <= *previousSlot) {
+		d.fail("invalid or repeated table slot")
+		return 0, key, barkov.ChoicesIndex{}
+	}
+	*previousSlot, *haveSlot = slot, true
+	record = record[4:]
+	tokens := unsafe.Slice((*TokenID)(unsafe.Pointer(&key)), stateSize)
+	for j := range stateSize {
+		tokens[j] = TokenID(binary.LittleEndian.Uint32(record[j*4:]))
+		if uint32(tokens[j]) >= vocab {
+			d.fail("state token outside vocabulary")
+		}
+	}
+	fields := record[stateSize*4:]
+	idx := barkov.ChoicesIndex{
+		Offset: binary.LittleEndian.Uint32(fields),
+		Count:  binary.LittleEndian.Uint32(fields[4:]),
+		Obs:    binary.LittleEndian.Uint32(fields[8:]),
+	}
+	validateIndex(d, idx, vocab, weights)
+	return slot, key, idx
 }
 
 func validateIndex(d *snapshotDecoder, idx barkov.ChoicesIndex, vocab uint32, weights []uint32) {
