@@ -11,7 +11,7 @@ const snapshotBlockRows = 1024
 
 func (b *backoffCore) writeTables(e *snapshotEncoder) {
 	for _, table := range b.tables {
-		table.(interface{ writeTable(*snapshotEncoder) }).writeTable(e)
+		table.writeTable(e)
 		if e.err != nil {
 			return
 		}

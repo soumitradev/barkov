@@ -17,7 +17,7 @@ func Compact(chain BackoffChain) error {
 	if err != nil {
 		return err
 	}
-	jobs := make(chan interface{ compact() })
+	jobs := make(chan orderTable)
 	var wg sync.WaitGroup
 	for range min(4, runtime.GOMAXPROCS(0)) {
 		wg.Go(func() {
@@ -27,7 +27,7 @@ func Compact(chain BackoffChain) error {
 		})
 	}
 	for _, table := range core.tables {
-		jobs <- table.(interface{ compact() })
+		jobs <- table
 	}
 	close(jobs)
 	wg.Wait()

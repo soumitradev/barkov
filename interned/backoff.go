@@ -44,6 +44,9 @@ type orderTable interface {
 	// slices resolves a Count>1 index to its followers and cumulative weights
 	slices(idx barkov.ChoicesIndex) (choices []TokenID, cum []uint32)
 	states() iter.Seq2[[]TokenID, uint32]
+	compact()
+	writeTable(e *snapshotEncoder)
+	snapshotStateCount() int
 }
 
 func (c *indexedCore[K]) lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool) {
