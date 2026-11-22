@@ -56,18 +56,8 @@ func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 // per-observation allocations to zero on the hot loop. Custom encoders
 // without AppendEncoder fall back to the simple per-call Encode path.
 func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-
-	maxLen, totalObs := 0, 0
-	for _, run := range corpus {
-		if len(run) > maxLen {
-			maxLen = len(run)
-		}
-		totalObs += len(run) + 1
-	}
+	beginSeq := c.beginWindow()
+	maxLen, totalObs := corpusShape(corpus)
 	items := make([]T, 0, c.stateSize+maxLen+1)
 
 	// totalObs/4 undershoots actual unique states by ~3.3x on typical
@@ -101,12 +91,27 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	return c
 }
 
-func (c *Chain[T]) precomputeBeginState() {
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
+// beginWindow returns a state-sized window of Begin sentinels
+func (c *Chain[T]) beginWindow() []T {
+	w := make([]T, c.stateSize)
+	for i := range w {
+		w[i] = c.sentinels.Begin
 	}
-	key := c.encoder.Encode(beginSeq)
+	return w
+}
+
+// corpusShape returns the longest run and the number of transitions the
+// corpus observes, counting each run's final move to End
+func corpusShape[T any](corpus [][]T) (maxLen, totalObs int) {
+	for _, run := range corpus {
+		maxLen = max(maxLen, len(run))
+		totalObs += len(run) + 1
+	}
+	return maxLen, totalObs
+}
+
+func (c *Chain[T]) precomputeBeginState() {
+	key := c.encoder.Encode(c.beginWindow())
 	if choices, ok := c.Model[key]; ok {
 		c.beginChoices, c.beginCumDist = calculateCumDist(choices)
 	}
@@ -127,11 +132,7 @@ func (c *Chain[T]) Move(state string) (T, error) {
 	}
 
 	// Fast-path for the begin state: reuse precomputed distributions.
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-	if state == c.encoder.Encode(beginSeq) && len(c.beginChoices) > 0 {
+	if state == c.encoder.Encode(c.beginWindow()) && len(c.beginChoices) > 0 {
 		return c.beginChoices[chooseToken32(c.beginCumDist)], nil
 	}
 

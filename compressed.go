@@ -96,18 +96,8 @@ func (c *Chain[T]) Compress() *CompressedChain[T] {
 // order of entries within a state group is unspecified (Compress also has
 // unspecified order due to Go's random map iteration).
 func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-
-	maxLen, totalObs := 0, 0
-	for _, run := range corpus {
-		if len(run) > maxLen {
-			maxLen = len(run)
-		}
-		totalObs += len(run) + 1
-	}
+	beginSeq := c.beginWindow()
+	maxLen, totalObs := corpusShape(corpus)
 
 	// Observed on the public corpus: numStates ≈ 0.82 * totalObs (fanout
 	// barely >1), so the old estimate of totalObs/4 undershot by ~3.3x,
@@ -248,8 +238,8 @@ func (cc *CompressedChain[T]) Move(state string) (T, error) {
 	if idx.Count == 1 {
 		return cc.Choices[idx.Offset], nil
 	}
-	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
-	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
+	cumDist := cc.CumDist[idx.Offset : idx.Offset+idx.Count]
+	choices := cc.Choices[idx.Offset : idx.Offset+idx.Count]
 	var choiceNum uint32
 	if cc.rng != nil {
 		choiceNum = cc.rng.Uint32N(cumDist[len(cumDist)-1])
@@ -292,21 +282,19 @@ func (cc *CompressedChain[T]) ChoicesCumDist(state string) (choices []T, cumDist
 	if !ok {
 		return nil, nil, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
 	}
-	choices = cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
-	cumDist = cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+	choices = cc.Choices[idx.Offset : idx.Offset+idx.Count]
+	cumDist = cc.CumDist[idx.Offset : idx.Offset+idx.Count]
 	return choices, cumDist, nil
 }
 
 // StateTotal returns the total observation weight of state (the sum of
-// all its transition counts), or ErrStateNotFound. CumDist is cumulative
-// within each state's group, so the total is the group's last entry, with
-// no iteration over followers needed.
+// all its transition counts), or ErrStateNotFound.
 func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
 	idx, ok := cc.Model[state]
 	if !ok {
 		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
 	}
-	return cc.CumDist[idx.Offset+uint32(idx.Count)-1], nil
+	return idx.Obs, nil
 }
 
 // States iterates all states as decoded token slices with their total
@@ -317,8 +305,7 @@ func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
 func (cc *CompressedChain[T]) States() iter.Seq2[[]T, uint32] {
 	return func(yield func([]T, uint32) bool) {
 		for state, idx := range cc.Model {
-			total := cc.CumDist[idx.Offset+uint32(idx.Count)-1]
-			if !yield(cc.encoder.Decode(state), total) {
+			if !yield(cc.encoder.Decode(state), idx.Obs) {
 				return
 			}
 		}
