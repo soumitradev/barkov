@@ -77,8 +77,8 @@ func WithSeed[T comparable](seed []T) GenOption[T] {
 }
 
 // WithInitialState starts the walk from tokens instead of the seed, padded the
-// same way. They are not emitted or counted against WithMaxTokens; nil keeps
-// the seed.
+// same way. Only the last StateSize tokens are used when tokens is longer. They
+// are not emitted or counted against WithMaxTokens, and nil keeps the seed.
 func WithInitialState[T comparable](tokens []T) GenOption[T] {
 	return func(c *genConfig[T]) { c.initialState = tokens }
 }
