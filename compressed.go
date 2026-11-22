@@ -8,12 +8,12 @@ import (
 	"sort"
 )
 
-// ChoicesIndex points into the flat Choices/CumDist arrays.
+// ChoicesIndex locates a state's followers in Choices and CumDist, and Obs
+// counts how often the state was observed.
 type ChoicesIndex struct {
 	Offset uint32
 	Count  uint32
-	// Obs is the total number of corpus observations of this state.
-	Obs uint32
+	Obs    uint32
 }
 
 // CompressedChain uses a struct-of-arrays layout for cache efficiency.
@@ -24,26 +24,20 @@ type CompressedChain[T comparable] struct {
 	stateSize int
 	sentinels Sentinels[T]
 	encoder   StateEncoder[T]
-	rng       *rand.Rand // nil = use package math/rand/v2
+	rng       *rand.Rand
 }
 
-// SetRNG overrides the random source used by Move. Intended for
-// deterministic benchmarks and tests; not safe for concurrent use.
+// SetRNG makes Move draw from r instead of math/rand/v2, for deterministic
+// tests and benchmarks. It is not safe for concurrent use.
 func (cc *CompressedChain[T]) SetRNG(r *rand.Rand) { cc.rng = r }
 
-// Compile-time checks that CompressedChain implements GenerativeChain and
-// exposes its RNG override through RNGSettable.
 var (
 	_ GenerativeChain[string] = (*CompressedChain[string])(nil)
 	_ RNGSettable             = (*CompressedChain[string])(nil)
 )
 
-// Compress converts the chain to SoA layout for better cache performance.
-//
-// Compress copies transitions verbatim and does not check for dangling
-// successors; if the source Chain was mutated by hand (bypassing Prune's
-// cascade), call Validate first to catch orphaned transitions at build
-// time rather than as an ErrStateNotFound from Gen.
+// Compress packs the chain into a CompressedChain. It copies transitions as
+// they are, so Validate a hand-edited Model first.
 func (c *Chain[T]) Compress() *CompressedChain[T] {
 	totalEntries := 0
 	for _, choices := range c.Model {
@@ -102,13 +96,10 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 	return cc
 }
 
-// observe streams every transition in corpus, returning the distinct state
-// keys and, per transition, the dense index of its state and its follower
+// observe returns the distinct state keys, then each transition's state index and follower.
 func (c *Chain[T]) observe(corpus [][]T) (keys []string, states []uint32, follows []T) {
 	beginSeq := c.beginWindow()
 	maxLen, totalObs := corpusShape(corpus)
-
-	// Fanout is barely above 1 on prose, so nearly every transition is a new state
 	estUnique := totalObs + 64
 	stateIdx := make(map[string]uint32, estUnique)
 	keys = make([]string, 0, estUnique)
@@ -135,9 +126,8 @@ func (c *Chain[T]) observe(corpus [][]T) (keys []string, states []uint32, follow
 	return keys, states, follows
 }
 
-// stateGroups links each state's transitions into a list without sorting a
-// copy: head[s] is the latest transition out of state s, or -1, and next[i]
-// is the one before i out of the same state
+// stateGroups threads each state's transitions into a list without sorting:
+// head[s] is the latest transition out of s, or -1, and next[i] the one before i.
 type stateGroups struct {
 	head, next []int32
 }
@@ -162,12 +152,11 @@ func (g stateGroups) size(s int) int {
 	return n
 }
 
-// Linear scans beat hashing for groups this small and allocate nothing
+// Linear scans beat hashing for groups this small and allocate nothing.
 const linearDedupeMax = 16
 
-// followDeduper appends one state's distinct followers to a chain with their
-// raw counts. Wide states like begin share one counting map so they stay
-// linear in group size instead of quadratic.
+// followDeduper reuses one counting map across wide states like begin, which
+// would go quadratic under a linear scan.
 type followDeduper[T comparable] struct {
 	counts map[T]uint32
 }
@@ -202,8 +191,7 @@ func (d *followDeduper[T]) appendFollows(cc *CompressedChain[T], follows []T, g 
 	}
 }
 
-// accumulate turns counts into a cumulative distribution in place and
-// returns their total
+// accumulate makes counts cumulative in place and returns their total.
 func accumulate(counts []uint32) uint32 {
 	var total uint32
 	for i, n := range counts {
@@ -213,20 +201,17 @@ func accumulate(counts []uint32) uint32 {
 	return total
 }
 
-// Implements GenerativeChain[T].
 func (cc *CompressedChain[T]) StateSize() int           { return cc.stateSize }
 func (cc *CompressedChain[T]) Sentinels() Sentinels[T]  { return cc.sentinels }
 func (cc *CompressedChain[T]) Encoder() StateEncoder[T] { return cc.encoder }
 
-// Move transitions from a state to a randomly chosen next token.
+// Move samples the token after state, or returns ErrStateNotFound.
 func (cc *CompressedChain[T]) Move(state string) (T, error) {
 	idx, ok := cc.Model[state]
 	if !ok {
 		var zero T
 		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
 	}
-	// Deterministic-choice fast path: when a state has exactly one follower,
-	// we skip RNG, slice construction, and sort.Search.
 	if idx.Count == 1 {
 		return cc.Choices[idx.Offset], nil
 	}
@@ -241,10 +226,8 @@ func (cc *CompressedChain[T]) Move(state string) (T, error) {
 	return choices[scanCumDist(cumDist, choiceNum)], nil
 }
 
-// scanCumDist returns the first index whose cumulative weight exceeds
-// choiceNum. State fanout averages ~1.1-1.8 on prose, so a linear scan
-// wins for small groups; begin-state fanouts in the thousands flip the
-// crossover to binary search.
+// scanCumDist returns the first index whose weight exceeds choiceNum. Most
+// states have one or two followers, so it scans unless the state is wide.
 func scanCumDist(cum []uint32, choiceNum uint32) int {
 	if len(cum) <= 16 {
 		for i, c := range cum {
@@ -257,18 +240,13 @@ func scanCumDist(cum []uint32, choiceNum uint32) int {
 	return sort.Search(len(cum), func(i int) bool { return cum[i] > choiceNum })
 }
 
-// MoveTokens is a convenience wrapper that encodes the state for the caller.
+// MoveTokens is Move for a state that isn't encoded yet.
 func (cc *CompressedChain[T]) MoveTokens(tokens []T) (T, error) {
 	return cc.Move(cc.encoder.Encode(tokens))
 }
 
-// ChoicesCumDist returns the choices and cumulative-distribution slices
-// backing a state. The returned slices alias internal storage and must
-// not be modified. Intended for callers that want to implement their
-// own sampling (temperature scaling, repetition penalty, etc.) instead
-// of the uniform weighted draw that Move performs.
-//
-// Returns ErrStateNotFound if the state isn't in the model.
+// ChoicesCumDist returns a state's followers and cumulative weights for
+// custom sampling. The slices alias the chain's storage, so don't modify them.
 func (cc *CompressedChain[T]) ChoicesCumDist(state string) (choices []T, cumDist []uint32, err error) {
 	idx, ok := cc.Model[state]
 	if !ok {
@@ -279,8 +257,7 @@ func (cc *CompressedChain[T]) ChoicesCumDist(state string) (choices []T, cumDist
 	return choices, cumDist, nil
 }
 
-// StateTotal returns the total observation weight of state (the sum of
-// all its transition counts), or ErrStateNotFound.
+// StateTotal returns how many times state was observed, or ErrStateNotFound.
 func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
 	idx, ok := cc.Model[state]
 	if !ok {
@@ -289,11 +266,8 @@ func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
 	return idx.Obs, nil
 }
 
-// States iterates all states as decoded token slices with their total
-// weights. The yielded slice is freshly allocated each iteration (via the
-// chain's own encoder) and safe to retain, so callers doing custom
-// scoring never cache an encoder or decode keys by hand. Perf-sensitive
-// callers can iterate Model directly.
+// States yields each state's decoded tokens and observation count. Each
+// slice is fresh and safe to keep. Iterate Model to skip decoding.
 func (cc *CompressedChain[T]) States() iter.Seq2[[]T, uint32] {
 	return func(yield func([]T, uint32) bool) {
 		for state, idx := range cc.Model {

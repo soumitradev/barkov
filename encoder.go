@@ -2,45 +2,25 @@ package barkov
 
 import "strings"
 
-// StateEncoder converts a sequence of tokens into an opaque string key used
-// for map lookups, and back. Implementations must be:
-//  1. Deterministic: same input → same output, always.
-//  2. Injective: different inputs → different outputs.
-//  3. Round-trippable: Decode(Encode(x)) must equal x.
-//
-// The returned key from Encode is used as a Go map key, so it must be safe
-// to store long-term and cheap to compare. Go strings are ideal because
-// they're immutable and have optimized hashing.
+// StateEncoder turns a token window into a map key and back. Encode must be
+// deterministic and injective, and Decode(Encode(x)) must equal x.
 type StateEncoder[T comparable] interface {
 	Encode(tokens []T) string
 	Decode(state string) []T
 }
 
-// AppendEncoder is an optional optimisation interface. Encoders that
-// implement it expose a zero-allocation path for writing the encoded key
-// into a caller-supplied byte buffer, which enables arena-style batching
-// in hot builders (Chain.Build, NGramSet, nhash). Implementations must
-// satisfy the same determinism and injectivity contract as Encode.
+// AppendEncoder lets builders encode keys without allocating. AppendEncoded
+// must append exactly the bytes of Encode(tokens) to dst.
 type AppendEncoder[T comparable] interface {
-	// AppendEncoded appends the encoded form of tokens to dst and returns
-	// the extended slice. The appended bytes must equal the bytes of
-	// Encode(tokens).
 	AppendEncoded(dst []byte, tokens []T) []byte
 }
 
-// SepEncoder joins strings with a separator. The separator must not appear
-// in any real token. Used as the default for string chains. For the common
-// SEP-keyed instance, reference DefaultStringEncoder instead of
-// re-constructing the struct at each call site.
+// SepEncoder joins string tokens with Sep, which must not appear in any token.
 type SepEncoder struct {
 	Sep string
 }
 
-// DefaultStringEncoder is the SepEncoder that string chains use by default
-// (InitChain wires it up, and it keys the same map as any string chain
-// built with SEP). Reference it instead of allocating SepEncoder{Sep: SEP}
-// in hot loops, for example when decoding CompressedChain state keys for
-// custom scoring.
+// DefaultStringEncoder matches the encoder InitChain gives string chains.
 var DefaultStringEncoder = SepEncoder{Sep: SEP}
 
 // Encode joins tokens with the separator.
@@ -48,7 +28,6 @@ func (e SepEncoder) Encode(tokens []string) string {
 	if len(tokens) == 0 {
 		return ""
 	}
-	// Pre-calculate total length for efficiency
 	n := len(e.Sep) * (len(tokens) - 1)
 	for _, t := range tokens {
 		n += len(t)
@@ -63,8 +42,7 @@ func (e SepEncoder) Encode(tokens []string) string {
 	return sb.String()
 }
 
-// AppendEncoded writes the joined form of tokens into dst without any
-// intermediate allocation. Satisfies AppendEncoder[string].
+// AppendEncoded appends the joined tokens to dst.
 func (e SepEncoder) AppendEncoded(dst []byte, tokens []string) []byte {
 	if len(tokens) == 0 {
 		return dst
