@@ -81,8 +81,6 @@ func (c *Chain[T]) beginWindow() []T {
 	return w
 }
 
-// corpusShape returns the longest run and the transition count, which on
-// prose nearly equals the number of distinct states.
 func corpusShape[T any](corpus [][]T) (maxLen, totalObs int) {
 	for _, run := range corpus {
 		maxLen = max(maxLen, len(run))
@@ -91,7 +89,6 @@ func corpusShape[T any](corpus [][]T) (maxLen, totalObs int) {
 	return maxLen, totalObs
 }
 
-// padRun reuses dst to frame run between a begin window and End.
 func (c *Chain[T]) padRun(dst, begin, run []T) []T {
 	dst = append(dst[:0], begin...)
 	dst = append(dst, run...)

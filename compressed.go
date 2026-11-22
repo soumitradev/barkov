@@ -96,7 +96,6 @@ func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
 	return cc
 }
 
-// observe returns the distinct state keys, then each transition's state index and follower.
 func (c *Chain[T]) observe(corpus [][]T) (keys []string, states []uint32, follows []T) {
 	beginSeq := c.beginWindow()
 	maxLen, totalObs := corpusShape(corpus)
@@ -191,7 +190,6 @@ func (d *followDeduper[T]) appendFollows(cc *CompressedChain[T], follows []T, g 
 	}
 }
 
-// accumulate makes counts cumulative in place and returns their total.
 func accumulate(counts []uint32) uint32 {
 	var total uint32
 	for i, n := range counts {

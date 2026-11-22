@@ -146,11 +146,6 @@ func (intEncoder) Decode(state string) []int {
 	return result
 }
 
-// TestBuildCompressedEquivalence asserts that the direct BuildCompressed
-// path produces structurally equivalent output to the legacy
-// BuildRaw().Compress() pipeline. Order within a state group is
-// unspecified, so Choices/CumDist are compared as multisets of
-// (token, count) pairs derived from the cumulative deltas.
 // wideBeginCorpus repeats 20 first words so the begin state has more
 // observations than a linear scan dedupes, with repeated followers
 func wideBeginCorpus() [][]string {
@@ -161,6 +156,11 @@ func wideBeginCorpus() [][]string {
 	return corpus
 }
 
+// TestBuildCompressedEquivalence asserts that the direct BuildCompressed
+// path produces structurally equivalent output to the legacy
+// BuildRaw().Compress() pipeline. Order within a state group is
+// unspecified, so Choices/CumDist are compared as multisets of
+// (token, count) pairs derived from the cumulative deltas.
 func TestBuildCompressedEquivalence(t *testing.T) {
 	cases := []struct {
 		name   string
