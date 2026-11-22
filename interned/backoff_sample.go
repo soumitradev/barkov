@@ -83,8 +83,7 @@ func (r *random) draw(cum []uint32) int {
 }
 
 // scanCumDist returns the first index whose cumulative weight exceeds
-// choiceNum. Most states have one or two followers, so a linear scan wins
-// until begin-state fanouts in the thousands favour binary search.
+// choiceNum. Linear scan wins for typical fanouts of one or two.
 func scanCumDist(cum []uint32, choiceNum uint32) int {
 	if len(cum) <= 16 {
 		for i, c := range cum {

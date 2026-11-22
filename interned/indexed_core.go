@@ -24,7 +24,6 @@ func (c *indexedCore[K]) StateSize() int                        { return c.state
 func (c *indexedCore[K]) Sentinels() barkov.Sentinels[TokenID]  { return c.sentinels }
 func (c *indexedCore[K]) Encoder() barkov.StateEncoder[TokenID] { return c.encoder }
 
-// pickFollow resolves a ChoicesIndex to a TokenID
 func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
 	// Fanout-1 states keep their only follower in Offset, which saves a
 	// Choices load on the most common lookup

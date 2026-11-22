@@ -2,8 +2,7 @@ package interned
 
 import barkov "github.com/soumitradev/barkov/v2"
 
-// WithEscape shares immutable tables with the original chain while
-// interpolating across context orders
+// WithEscape implements BackoffChain
 func (b *backoffCore) WithEscape(scale float64) BackoffChain {
 	view := *b
 	view.escape = max(scale, 0)
@@ -82,8 +81,7 @@ func (b *backoffCore) escapeProbability(m int, idx barkov.ChoicesIndex) float64 
 	return min(1, b.escape*t/(n+t))
 }
 
-// allowedShare is the fraction of the order-m state's observations that
-// copy steering allows after window
+// allowedShare is the share of the order-m state's observations steering allows
 func (b *backoffCore) allowedShare(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) float64 {
 	if sv.mode == steerOff {
 		return 1

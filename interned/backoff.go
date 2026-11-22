@@ -8,38 +8,32 @@ import (
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// BackoffChain is a backoff engine chain that supports state iteration
-// across its orders and RNG configuration.
+// BackoffChain is the variable-order chain BuildBackoff returns.
 type BackoffChain interface {
 	barkov.GenerativeChain[TokenID]
 	barkov.RNGSettable
-	// States iterates all states at order (1..MaxOrder) with their total
-	// transition observation counts.
+	// States iterates the states at order 1..MaxOrder with their observation counts.
 	States(order int) iter.Seq2[[]TokenID, uint32]
 	// SeedContext samples observed history for a short interior seed.
 	SeedContext(seed []TokenID) ([]TokenID, error)
-	// WithoutVerbatim returns a view sharing the same immutable model tables.
+	// WithoutVerbatim returns a view of the same tables with copy steering off.
 	WithoutVerbatim() BackoffChain
-	// CopiesRun reports whether tokens contain a corpus n-gram as long as
-	// the copy-steering window, i.e. a run that steering would have
-	// prevented inside one walk. False when steering is disabled.
+	// CopiesRun reports whether tokens contain a corpus run that copy steering
+	// would have prevented inside one walk. False when steering is disabled.
 	CopiesRun(tokens []TokenID) bool
-	// IsFragment reports whether tokens occur contiguously inside one
-	// corpus message. Exact for up to MaxOrder tokens; longer runs are
-	// what copy steering prevents.
+	// IsFragment reports whether tokens occur contiguously inside one corpus
+	// message. Only runs of up to MaxOrder tokens can match.
 	IsFragment(tokens []TokenID) bool
-	// WithEscape returns a view sharing the same tables whose walk
-	// interpolates across context orders instead of always using the
-	// longest one. scale 0 restores the default.
+	// WithEscape returns a view of the same tables whose walk interpolates
+	// across context orders. scale 0 restores the longest-context walk.
 	WithEscape(scale float64) BackoffChain
 	// Options explains one step of the walk after window.
 	Options(window []TokenID) ([]OrderOptions, int)
 }
 
-// orderTable is the view backoffCore needs of one per-order indexedCore
+// orderTable is one per-order indexedCore, whatever its key size
 type orderTable interface {
-	// lookupTail probes with tail, which must hold exactly the table's
-	// stateSize tokens
+	// lookupTail needs exactly the table's stateSize tokens
 	lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool)
 	// slices resolves a Count>1 index to its followers and cumulative weights
 	slices(idx barkov.ChoicesIndex) (choices []TokenID, cum []uint32)
@@ -76,9 +70,8 @@ func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 	}
 }
 
-// backoffCore walks a stack of per-order tables, trying the longest context
-// first and backing off until one has MinSupport observations. The walk
-// depends only on the window and RNG, so concurrent readers are safe unless
+// backoffCore walks per-order tables from the longest context down to the
+// first with MinSupport observations. Concurrent readers are safe unless
 // SetRNG is used.
 type backoffCore struct {
 	random
@@ -109,17 +102,15 @@ func (b *backoffCore) Move(state string) (TokenID, error) {
 	return b.moveTail(window)
 }
 
-// moveTail picks the next token after window (length MaxOrder). When
-// steering vetoes every candidate at an order the walk falls through to the
-// next shorter one, whose candidate set is wider.
+// moveTail picks the next token after window. When steering vetoes every
+// candidate at an order, the next shorter order offers a wider set.
 func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 	var sv steerView
 	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(window) {
 		sv = b.steerSnapshot(window)
 	}
-	// Declared here because escape analysis can't keep it on the stack once
-	// its address passes through the orderTable interface, and order-1
-	// contexts can have thousands of candidates
+	// Shared by every candidate probe, since a buffer passed through the
+	// orderTable interface escapes to the heap
 	var probeBuf [8]TokenID
 	if b.escape > 0 {
 		return b.moveEscape(window, sv, &probeBuf)
@@ -164,9 +155,8 @@ func (b *backoffCore) noContinuationErr(failure stepFailure) error {
 	}
 }
 
-// IsFragment implements BackoffChain. Every run of up to MaxOrder tokens
-// inside a message is the context before its next token (or END), so the
-// run is a key of the table of its own length.
+// IsFragment implements BackoffChain. Every run inside a message is the
+// context before its next token, so it is a key of the table of its length.
 func (b *backoffCore) IsFragment(tokens []TokenID) bool {
 	if len(tokens) == 0 || len(tokens) > b.cfg.MaxOrder {
 		return false

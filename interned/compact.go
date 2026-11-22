@@ -6,18 +6,18 @@ import (
 	"sync"
 )
 
-// Compact shrinks a freshly trained chain to what restoring its snapshot
-// builds: sparse state tables are rehashed at the normal load factor, as a
-// snapshot write would, and transition slices lose the spare capacity
-// training reserves for every observation. Tables are compacted a few at a
-// time, each replacing its training copy as soon as it is ready. Generation
-// is unaffected. Compact must not run concurrently with any use of chain.
+// Compact shrinks a freshly trained chain to the size restoring its snapshot
+// would give: state tables are rehashed at the normal load factor and
+// transition slices drop their training slack. Generation is unaffected.
+// Compact must not run concurrently with any use of chain.
 func Compact(chain BackoffChain) error {
 	core, err := snapshotCore(chain)
 	if err != nil {
 		return err
 	}
 	jobs := make(chan orderTable)
+	// A few tables at a time, so only a few training copies and their
+	// compacted replacements are alive together
 	var wg sync.WaitGroup
 	for range min(4, runtime.GOMAXPROCS(0)) {
 		wg.Go(func() {

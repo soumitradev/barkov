@@ -1,7 +1,6 @@
 package interned
 
-// WithoutVerbatim shares immutable tables and context indexes with the
-// original chain while disabling only copy steering
+// WithoutVerbatim implements BackoffChain
 func (b *backoffCore) WithoutVerbatim() BackoffChain {
 	view := *b
 	view.cfg.MaxVerbatim = -1
@@ -23,8 +22,7 @@ func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
 }
 
 // runLongEnough reports whether the window's last MaxVerbatim-1 tokens are
-// all real, the only case where a candidate can complete a verbatim run.
-// The per-window validator likewise only sees full windows.
+// all real, since only then can a candidate complete a verbatim run
 func (b *backoffCore) runLongEnough(window []TokenID) bool {
 	for _, tok := range window[len(window)-(b.cfg.MaxVerbatim-1):] {
 		if tok == b.sentinels.Begin {
@@ -52,8 +50,8 @@ type steerView struct {
 	set    []TokenID // steerSet, aliases chain storage
 }
 
-// steerProbeFallback caps the follower sets scanned by membership. About
-// 98% of steering states on prose have one follower, so larger sets are rare.
+// steerProbeFallback caps the follower sets scanned by membership. Nearly
+// every steering state on prose has one follower.
 const steerProbeFallback = 16
 
 func (b *backoffCore) steerSnapshot(window []TokenID) steerView {
@@ -96,8 +94,7 @@ func (b *backoffCore) filtered(sv steerView, window []TokenID, tok TokenID, prob
 	return false
 }
 
-// wouldExtendVerbatim probes the order-R table, whose keys are exactly the
-// R-grams found inside messages
+// wouldExtendVerbatim probes the order-R table, whose keys are the R-grams inside messages
 func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID, probe *[8]TokenID) bool {
 	r := b.cfg.MaxVerbatim
 	copy(probe[:r-1], window[len(window)-(r-1):])

@@ -6,17 +6,11 @@ import (
 )
 
 // BuildBackoff constructs a variable-order chain from a pre-interned
-// corpus: at each step the walk uses the longest context (up to
-// cfg.MaxOrder) with at least cfg.MinSupport corpus observations, backing
-// off to shorter contexts down to MinOrder where the data is thin. Compared
-// to a fixed-order chain, which replays corpus spans verbatim wherever a
-// long context has exactly one continuation, backoff samples where the
-// corpus genuinely branches.
-//
-// The zero-value config gives MaxOrder 6, MinOrder 1, MinSupport 1, and
-// verbatim steering at window MaxOrder. Panics on out-of-range config
-// values, matching the Build convention. StateSize() == MaxOrder, so
-// Gen/GenIter work unchanged.
+// corpus. Each step uses the longest context (up to cfg.MaxOrder) with at
+// least cfg.MinSupport observations, backing off down to MinOrder, so it
+// samples where the corpus branches instead of replaying spans verbatim
+// like a fixed-order chain. StateSize() is MaxOrder. Panics on
+// out-of-range config values.
 func BuildBackoff(cfg BackoffConfig, corpus [][]TokenID) BackoffChain {
 	cfg = cfg.withDefaults()
 	if err := cfg.validate(); err != nil {

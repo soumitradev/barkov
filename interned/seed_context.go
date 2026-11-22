@@ -7,13 +7,12 @@ import (
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// contextIndex stores minimum-order states sorted from their last token back.
-// Every suffix is one contiguous range. Cumulative observation counts allow
-// weighted sampling without scanning the corpus or weakening MinSupport.
+// contextIndex holds the MinOrder states sorted by their tokens read from
+// last to first, so every suffix is one contiguous range
 type contextIndex struct {
 	order      int
-	rows       []TokenID // each row contains order tokens followed by its observation count
-	cumulative []uint64
+	rows       []TokenID // each row is order tokens then its observation count
+	cumulative []uint64  // observations of supported rows, for weighted draws
 }
 
 func newContextIndex(table orderTable, order, minSupport int) *contextIndex {
@@ -65,10 +64,9 @@ func (x *contextIndex) compare(i int, suffix []TokenID) int {
 	return 0
 }
 
-// SeedContext samples observed tokens preceding a short interior seed. The
-// returned history completes MinOrder; it is not part of the emitted seed.
-// Seeds already at least MinOrder long need no extra history. Callers must
-// still pass the seed and sampled history through the normal generation walk.
+// SeedContext samples observed tokens preceding a seed shorter than MinOrder,
+// completing a MinOrder context. The history is not part of the emitted seed,
+// and callers still pass both through the normal generation walk.
 func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 	if len(seed) == 0 || len(seed) >= b.cfg.MinOrder {
 		return nil, nil
