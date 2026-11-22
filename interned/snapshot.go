@@ -54,6 +54,9 @@ func (s ModelSnapshot) WriteTo(w io.Writer) (int64, error) {
 		}
 		e.u32(uint32(len(token)))
 		e.bytes([]byte(token))
+		if e.err != nil {
+			return counted.n, e.err
+		}
 	}
 	e.u32(uint32(forward.cfg.MaxOrder))
 	e.u32(uint32(forward.cfg.MinOrder))
@@ -93,9 +96,12 @@ func ReadModelSnapshot(r io.Reader) (ModelSnapshot, error) {
 	}
 	d := snapshotDecoder{r: bufio.NewReaderSize(r, 64<<10), hash: h, remaining: remaining}
 	var s ModelSnapshot
-	magic := make([]byte, 8)
-	d.bytes(magic)
-	if !slices.Equal(magic, snapshotMagic()) {
+	var magic [8]byte
+	d.bytes(magic[:])
+	if d.err != nil {
+		return s, d.err
+	}
+	if !slices.Equal(magic[:], snapshotMagic()) {
 		return s, fmt.Errorf("%w: unsupported format version or byte order", ErrInvalidSnapshot)
 	}
 	n := d.u32()
@@ -192,8 +198,10 @@ func ReadModelSnapshot(r io.Reader) (ModelSnapshot, error) {
 		return ModelSnapshot{}, d.err
 	}
 	// This is a complete snapshot frame, not a prefix of another stream.
-	if _, err := d.r.ReadByte(); err != io.EOF {
-		return ModelSnapshot{}, fmt.Errorf("%w: trailing data or read error: %v", ErrInvalidSnapshot, err)
+	if _, err := d.r.ReadByte(); err == nil {
+		return ModelSnapshot{}, fmt.Errorf("%w: trailing data", ErrInvalidSnapshot)
+	} else if err != io.EOF {
+		return ModelSnapshot{}, fmt.Errorf("%w: trailing read error: %w", ErrInvalidSnapshot, err)
 	}
 	return s, nil
 }
