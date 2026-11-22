@@ -1,10 +1,7 @@
-// Tier 3: custom token type. The corpus is int64 (could be anything
-// comparable: user IDs, event codes, enum values). The user provides
-// their own encoder; barkov never assumes strings.
+// Tier 3: custom comparable token type (int64) with a user-supplied encoder.
 //
-// The encoder implements both StateEncoder and AppendEncoder; the
-// AppendEncoded path is optional but unlocks arena interning and
-// zero-alloc validators when present.
+// Implementing AppendEncoder alongside StateEncoder is optional and lets
+// chain builds and validators reuse byte buffers instead of allocating keys.
 package main
 
 import (
