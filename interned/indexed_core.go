@@ -128,86 +128,9 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		stateSize: stateSize,
 	}
 
-	// Small groups dedupe by linear scan and large ones by sorting, both
-	// cheaper than a map per state
-	const linearThreshold = 16
 	var sortBuf []TokenID
 	stateIdx.forEach(func(_ K, val *barkov.ChoicesIndex) {
-		s := val.Offset - 1
-		offset := uint32(len(cc.Choices))
-		groupStart := len(cc.Choices)
-
-		groupSize := 0
-		for i := head[s]; i != -1; i = next[i] {
-			groupSize++
-		}
-
-		if groupSize <= linearThreshold {
-			for i := head[s]; i != -1; i = next[i] {
-				tok := pendingTok[i]
-				found := false
-				for m := groupStart; m < len(cc.Choices); m++ {
-					if cc.Choices[m] == tok {
-						cc.CumDist[m]++
-						found = true
-						break
-					}
-				}
-				if !found {
-					cc.Choices = append(cc.Choices, tok)
-					cc.CumDist = append(cc.CumDist, 1)
-				}
-			}
-		} else {
-			sortBuf = sortBuf[:0]
-			for i := head[s]; i != -1; i = next[i] {
-				sortBuf = append(sortBuf, pendingTok[i])
-			}
-			slices.Sort(sortBuf)
-
-			var prev TokenID
-			var cnt uint32
-			for idx, tok := range sortBuf {
-				if idx == 0 {
-					prev = tok
-					cnt = 1
-					continue
-				}
-				if tok == prev {
-					cnt++
-				} else {
-					cc.Choices = append(cc.Choices, prev)
-					cc.CumDist = append(cc.CumDist, cnt)
-					prev = tok
-					cnt = 1
-				}
-			}
-			if len(sortBuf) > 0 {
-				cc.Choices = append(cc.Choices, prev)
-				cc.CumDist = append(cc.CumDist, cnt)
-			}
-		}
-
-		count := uint32(len(cc.Choices) - groupStart)
-		var indexOffset uint32
-		if count == 1 {
-			// Pack the only follower into Offset for pickFollow and drop its slot
-			indexOffset = uint32(cc.Choices[groupStart])
-			cc.Choices = cc.Choices[:groupStart]
-			cc.CumDist = cc.CumDist[:groupStart]
-		} else {
-			var total uint32
-			for m := groupStart; m < len(cc.Choices); m++ {
-				total += cc.CumDist[m]
-				cc.CumDist[m] = total
-			}
-			indexOffset = offset
-		}
-		*val = barkov.ChoicesIndex{
-			Offset: indexOffset,
-			Count:  count,
-			Obs:    uint32(groupSize),
-		}
+		*val, sortBuf = cc.finalizeGroup(head[val.Offset-1], next, pendingTok, sortBuf)
 	})
 	cc.Model = stateIdx
 	return cc
@@ -226,4 +149,77 @@ func stateRatioEst(stateSize int) float64 {
 	default:
 		return 0.85
 	}
+}
+
+// Small groups dedupe by linear scan and large ones by sorting, both cheaper
+// than a map per state
+const indexedLinearThreshold = 16
+
+func (cc *indexedCore[K]) finalizeGroup(
+	first int32,
+	next []int32,
+	pendingTok []TokenID,
+	sortBuf []TokenID,
+) (barkov.ChoicesIndex, []TokenID) {
+	groupStart := len(cc.Choices)
+	groupSize := 0
+	for i := first; i != -1; i = next[i] {
+		groupSize++
+	}
+	if groupSize <= indexedLinearThreshold {
+		cc.appendGroupLinear(first, next, pendingTok, groupStart)
+	} else {
+		sortBuf = cc.appendGroupSorted(first, next, pendingTok, sortBuf[:0])
+	}
+
+	count := uint32(len(cc.Choices) - groupStart)
+	if count == 1 {
+		// Pack the only follower into Offset for pickFollow and drop its slot
+		only := uint32(cc.Choices[groupStart])
+		cc.Choices = cc.Choices[:groupStart]
+		cc.CumDist = cc.CumDist[:groupStart]
+		return barkov.ChoicesIndex{Offset: only, Count: 1, Obs: uint32(groupSize)}, sortBuf
+	}
+	var total uint32
+	for m := groupStart; m < len(cc.Choices); m++ {
+		total += cc.CumDist[m]
+		cc.CumDist[m] = total
+	}
+	return barkov.ChoicesIndex{Offset: uint32(groupStart), Count: count, Obs: uint32(groupSize)}, sortBuf
+}
+
+func (cc *indexedCore[K]) appendGroupLinear(first int32, next []int32, pendingTok []TokenID, groupStart int) {
+	for i := first; i != -1; i = next[i] {
+		tok := pendingTok[i]
+		if m := slices.Index(cc.Choices[groupStart:], tok); m >= 0 {
+			cc.CumDist[groupStart+m]++
+			continue
+		}
+		cc.Choices = append(cc.Choices, tok)
+		cc.CumDist = append(cc.CumDist, 1)
+	}
+}
+
+func (cc *indexedCore[K]) appendGroupSorted(first int32, next []int32, pendingTok []TokenID, sortBuf []TokenID) []TokenID {
+	for i := first; i != -1; i = next[i] {
+		sortBuf = append(sortBuf, pendingTok[i])
+	}
+	slices.Sort(sortBuf)
+	if len(sortBuf) == 0 {
+		return sortBuf
+	}
+	prev := sortBuf[0]
+	var cnt uint32 = 1
+	for _, tok := range sortBuf[1:] {
+		if tok == prev {
+			cnt++
+			continue
+		}
+		cc.Choices = append(cc.Choices, prev)
+		cc.CumDist = append(cc.CumDist, cnt)
+		prev, cnt = tok, 1
+	}
+	cc.Choices = append(cc.Choices, prev)
+	cc.CumDist = append(cc.CumDist, cnt)
+	return sortBuf
 }
