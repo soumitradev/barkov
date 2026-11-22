@@ -66,6 +66,14 @@ func (c *genConfig[T]) tokenLimit() int {
 	return DefaultMaxTokens
 }
 
+// windowWidth is how many tokens the n-gram validator sees per call
+func (c *genConfig[T]) windowWidth(stateSize int) int {
+	if c.validatorWidth == 0 {
+		return stateSize + 2
+	}
+	return c.validatorWidth
+}
+
 // WithSeed prepends seed tokens to the generated sequence.
 // Padding with Sentinels.Begin happens automatically if seed is shorter
 // than chain.StateSize().

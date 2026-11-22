@@ -37,7 +37,7 @@ func GenIter[T comparable](
 }
 
 // validateOutputIter decorates inner with a whole-output check, without
-// touching the hot loops in genIterSingle/genIterSingleFast. It buffers
+// touching the hot loops in walk. It buffers
 // inner's entire sequence (seed tokens plus generated, sentinels
 // excluded, exactly what Gen would return), then either yields
 // ErrSentenceFailedValidation or replays the buffered tokens. This makes
@@ -85,39 +85,8 @@ func Gen[T comparable](
 	opts ...GenOption[T],
 ) ([]T, error) {
 	if len(opts) == 0 && ctx.Done() == nil {
-		switch chain.StateSize() {
-		case 1:
-			if fm, ok := any(chain).(FastMoverKey[[1]T, T]); ok {
-				return genFastCollect[T, [1]T](chain, fm)
-			}
-		case 2:
-			if fm, ok := any(chain).(FastMoverKey[[2]T, T]); ok {
-				return genFastCollect[T, [2]T](chain, fm)
-			}
-		case 3:
-			if fm, ok := any(chain).(FastMoverKey[[3]T, T]); ok {
-				return genFastCollect[T, [3]T](chain, fm)
-			}
-		case 4:
-			if fm, ok := any(chain).(FastMoverKey[[4]T, T]); ok {
-				return genFastCollect[T, [4]T](chain, fm)
-			}
-		case 5:
-			if fm, ok := any(chain).(FastMoverKey[[5]T, T]); ok {
-				return genFastCollect[T, [5]T](chain, fm)
-			}
-		case 6:
-			if fm, ok := any(chain).(FastMoverKey[[6]T, T]); ok {
-				return genFastCollect[T, [6]T](chain, fm)
-			}
-		case 7:
-			if fm, ok := any(chain).(FastMoverKey[[7]T, T]); ok {
-				return genFastCollect[T, [7]T](chain, fm)
-			}
-		case 8:
-			if fm, ok := any(chain).(FastMoverKey[[8]T, T]); ok {
-				return genFastCollect[T, [8]T](chain, fm)
-			}
+		if w := keyWalkerFor(chain); w != nil {
+			return w.collect(chain)
 		}
 	}
 	cfg := &genConfig[T]{}
