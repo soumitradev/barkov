@@ -118,9 +118,11 @@ func Seed(words []string) GenOption {
 	return func(gc *genConfig) { gc.seed = words }
 }
 
-// SeedMiddle generates around words using Bidirectional(). Output must continue
-// past the seed (unless WithSeedEnding is set). A backward-only attempt switches
-// remaining retries to forward-only. All-unknown seeds fall back to unseeded.
+// SeedMiddle generates around words using Bidirectional(). Short seeds get
+// observed history without lowering MinOrder or MinSupport. Output must continue
+// past the seed (unless WithSeedEnding is set), and a backward-only attempt
+// switches remaining retries to forward-only within the original budgets.
+// All-unknown seeds fall back to unseeded.
 func SeedMiddle(words []string) GenOption {
 	return func(gc *genConfig) { gc.seedMiddle = words }
 }
@@ -146,7 +148,9 @@ func WithThreads(n int) GenOption {
 }
 
 // WithVerbatimFallback retries an exhausted validation failure without copy
-// prevention, keeping seed, support, length and timeout constraints.
+// prevention, keeping seed, support, length and timeout constraints. The
+// fallback gets its own Retries budget and changes neither the model nor
+// concurrent calls.
 func WithVerbatimFallback() GenOption {
 	return func(gc *genConfig) { gc.verbatimFallback = true }
 }

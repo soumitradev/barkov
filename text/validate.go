@@ -9,7 +9,8 @@ import (
 // Validate checks whether tokens satisfy Generate's output rules under opts
 // (MaxTokens, whole-message, copied runs unless WithoutCopySteering, and
 // WithoutFragments). It inspects the whole output, so it is stricter than
-// Generate's walk-only steering. Failures wrap barkov.ErrSentenceFailedValidation.
+// Generate's walk-only steering. Words outside the vocabulary match no corpus
+// text. Failures wrap barkov.ErrSentenceFailedValidation.
 func (g *Generator) Validate(tokens []string, opts ...GenOption) error {
 	gc := genConfig{generationConfig: g.defaults}
 	for _, opt := range opts {
