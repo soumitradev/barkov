@@ -11,13 +11,13 @@ import (
 	"github.com/soumitradev/barkov/v2/interned"
 )
 
-func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]string, error) {
+func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig, fallback bool) ([]string, error) {
 	if g.reverseChain == nil {
 		return nil, errors.New("text: SeedMiddle requires Bidirectional() option at New")
 	}
 	seed := g.internSeed(gc.seedMiddle)
 	if len(seed) == 0 {
-		return g.generateForward(ctx, gc, nil)
+		return g.generateForward(ctx, gc, nil, fallback)
 	}
 	revSeed := slices.Clone(seed)
 	slices.Reverse(revSeed)
@@ -31,7 +31,7 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 		if forwardOnly && g.messages == nil {
 			// Last-resort copying may back off a terminal seed to the shortest
 			// permitted context, while still emitting the complete supplied seed.
-			contextSeed = seed[max(0, len(seed)-g.minOrder):]
+			contextSeed = seed[max(0, len(seed)-g.minOrder()):]
 		}
 		fwdOpts, fwdHistory, fwdErr := g.middleOptions(g.chain, seed, contextSeed, gc)
 		var fwd, bwd, bwdHistory []interned.TokenID
@@ -51,7 +51,7 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 				fwd, fwdErr = barkov.Gen(ctx, g.chain, fwdOpts...)
 			}
 		}
-		a := g.startAttempt(gc, fwd, fwdErr, bwd, bwdErr)
+		a := g.startAttempt(gc, fallback, fwd, fwdErr, bwd, bwdErr)
 		if fwdErr != nil {
 			g.finishAttempt(gc, a, nil, fwdErr)
 			if !retryableAttempt(fwdErr) {
@@ -74,7 +74,7 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 				err := g.validateJoined(bwd, gc)
 				g.finishAttempt(gc, a, bwd, err)
 				if err == nil {
-					g.traceWalk(gc, walk, len(bwd)-len(seed))
+					g.traceWalk(gc, fallback, walk, len(bwd)-len(seed))
 					return g.vocab.DecodeTokens(bwd), nil
 				}
 				lastErr = err
@@ -93,7 +93,7 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 			err := g.validateJoined(spliced, gc)
 			if err == nil {
 				g.finishAttempt(gc, a, spliced, nil)
-				g.traceWalk(gc, walk, len(bwd)-len(seed))
+				g.traceWalk(gc, fallback, walk, len(bwd)-len(seed))
 				return g.vocab.DecodeTokens(spliced), nil
 			}
 			if gc.spliceCheck {
@@ -107,7 +107,7 @@ func (g *Generator) generateMiddleOut(ctx context.Context, gc *genConfig) ([]str
 		lastErr = g.validateJoined(fwd, gc)
 		g.finishAttempt(gc, a, fwd, lastErr)
 		if lastErr == nil {
-			g.traceWalk(gc, walk, 0)
+			g.traceWalk(gc, fallback, walk, 0)
 			return g.vocab.DecodeTokens(fwd), nil
 		}
 	}
@@ -121,14 +121,14 @@ type middleWalk struct {
 }
 
 // traceWalk records the walk of a middle-out result whose seed sits at index
-func (g *Generator) traceWalk(gc *genConfig, w middleWalk, index int) {
+func (g *Generator) traceWalk(gc *genConfig, fallback bool, w middleWalk, index int) {
 	if gc.trace == nil {
 		return
 	}
 	backward := g.vocab.DecodeTokens(w.backwardHistory)
 	slices.Reverse(backward)
 	gc.trace.Walk = Walk{Seed: index, SeedLen: w.seed, Middle: true, Backward: index > 0, HiddenSeed: w.hidden,
-		History: g.vocab.DecodeTokens(w.history), BackwardHistory: backward, Unsteered: gc.noSteering || gc.fallback}
+		History: g.vocab.DecodeTokens(w.history), BackwardHistory: backward, Unsteered: gc.noSteering || fallback}
 }
 
 // middleOptions also returns the history sampled before a short seed, in

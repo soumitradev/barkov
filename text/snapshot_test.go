@@ -50,7 +50,7 @@ func TestSnapshotPreservesGeneration(t *testing.T) {
 				if err != nil {
 					t.Fatalf("order=%d reverse=%v copy=%d: %v", order, bidirectional, copying, err)
 				}
-				if original.defaults != restored.defaults || original.minOrder != restored.minOrder {
+				if original.defaults != restored.defaults || original.minOrder() != restored.minOrder() {
 					t.Fatal("generation defaults changed")
 				}
 				if !restored.Contains("世界") || !restored.Contains("🙂") {

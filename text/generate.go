@@ -33,7 +33,7 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 	}
 
 	g = g.withWalk(&gc)
-	out, err := g.generate(ctx, &gc)
+	out, err := g.generate(ctx, &gc, false)
 	if err == nil || !gc.verbatimFallback || g.messages == nil || !errors.Is(err, barkov.ErrSentenceFailedValidation) {
 		return out, err
 	}
@@ -46,8 +46,7 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 		fallback.reverseChain = g.reverseChain.WithoutVerbatim()
 	}
 	fallback.messages = nil
-	gc.fallback = true
-	return fallback.generate(ctx, &gc)
+	return fallback.generate(ctx, &gc, true)
 }
 
 // withWalk returns g, or a copy walking views of its chains for per-call
@@ -71,14 +70,14 @@ func (g *Generator) withWalk(gc *genConfig) *Generator {
 	return &view
 }
 
-func (g *Generator) generate(ctx context.Context, gc *genConfig) ([]string, error) {
+func (g *Generator) generate(ctx context.Context, gc *genConfig, fallback bool) ([]string, error) {
 	if gc.seedMiddle != nil {
-		return g.generateMiddleOut(ctx, gc)
+		return g.generateMiddleOut(ctx, gc, fallback)
 	}
-	return g.generateForward(ctx, gc, g.internSeed(gc.seed))
+	return g.generateForward(ctx, gc, g.internSeed(gc.seed), fallback)
 }
 
-func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []interned.TokenID) ([]string, error) {
+func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []interned.TokenID, fallback bool) ([]string, error) {
 	genOpts := g.genOptions(seed, gc.maxTokens, gc.threads)
 	if gc.noFragments {
 		whole := g.messages.NotWholeMessage()
@@ -90,10 +89,10 @@ func (g *Generator) generateForward(ctx context.Context, gc *genConfig, seed []i
 	var lastErr error
 	for attempt := 0; attempt < gc.retries; attempt++ {
 		out, err := barkov.Gen(ctx, g.chain, genOpts...)
-		g.finishAttempt(gc, g.startAttempt(gc, out, err, nil, nil), out, err)
+		g.finishAttempt(gc, g.startAttempt(gc, fallback, out, err, nil, nil), out, err)
 		if err == nil {
 			if gc.trace != nil {
-				gc.trace.Walk = Walk{SeedLen: len(seed), Unsteered: gc.noSteering || gc.fallback}
+				gc.trace.Walk = Walk{SeedLen: len(seed), Unsteered: gc.noSteering || fallback}
 			}
 			return g.vocab.DecodeTokens(out), nil
 		}

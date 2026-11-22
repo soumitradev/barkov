@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	barkov "github.com/soumitradev/barkov/v2"
-	"github.com/soumitradev/barkov/v2/interned"
 )
 
 // Validate reports whether tokens satisfy the rules Generate imposes on its
@@ -22,14 +21,7 @@ func (g *Generator) Validate(tokens []string, opts ...GenOption) error {
 	for _, opt := range opts {
 		opt(&gc)
 	}
-	ids := make([]interned.TokenID, len(tokens))
-	for i, t := range tokens {
-		id, ok := g.vocab.Lookup(t)
-		if !ok {
-			id = g.unknownContext
-		}
-		ids[i] = id
-	}
+	ids := g.lookup(tokens)
 	if err := g.validateResult(ids, gc.maxTokens); err != nil {
 		return err
 	}

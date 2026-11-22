@@ -7,25 +7,21 @@ import (
 	"time"
 )
 
-// avDefault is the sentinel config value meaning "anti-verbatim window not
-// set; default it to Order()+2". A user-supplied 0 disables anti-verbatim;
-// a positive value fixes the window.
-const avDefault = -1
-
 type config struct {
 	generationConfig
-	order         int
-	minOrder      int
-	minSupport    int
-	antiVerbatim  int
-	bidirectional bool
-	rng           *rand.Rand
+	order           int
+	minOrder        int
+	minSupport      int
+	antiVerbatim    int
+	antiVerbatimSet bool
+	bidirectional   bool
+	rng             *rand.Rand
 }
 
 func defaultConfig() config {
 	return config{
 		generationConfig: generationConfig{timeout: 10 * time.Second, retries: 64},
-		order:            4, minOrder: 1, minSupport: 1, antiVerbatim: avDefault,
+		order:            4, minOrder: 1, minSupport: 1,
 	}
 }
 
@@ -83,7 +79,12 @@ func Threads(n int) Option { return func(c *config) { c.threads = n } }
 // AntiVerbatim sets the n-gram window for verbatim-copy rejection. Default
 // Order()+2. 0 disables anti-verbatim entirely (both the sliding n-gram
 // check and the whole-message check).
-func AntiVerbatim(n int) Option { return func(c *config) { c.antiVerbatim = n } }
+func AntiVerbatim(n int) Option {
+	return func(c *config) {
+		c.antiVerbatim = n
+		c.antiVerbatimSet = true
+	}
+}
 
 // MaxTokens sets a default maximum token length for generated outputs.
 // Attempts exceeding this limit are rejected and retried up to Retries.
@@ -113,7 +114,6 @@ type genConfig struct {
 	spliceCheck      bool
 	noFragments      bool
 	trace            *Trace
-	fallback         bool
 }
 
 type generationConfig struct {

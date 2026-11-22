@@ -23,7 +23,6 @@ type Generator struct {
 	vocab          *interned.Vocabulary
 	defaults       generationConfig
 	fixedRNG       bool
-	minOrder       int
 	unknownContext interned.TokenID // absent from the immutable trained vocabulary
 
 	// messages holds fnv digests of every complete corpus message, so a
@@ -50,7 +49,7 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	if err := cfg.generationConfig.validate(cfg.rng != nil); err != nil {
 		return nil, err
 	}
-	if cfg.antiVerbatim < 0 && cfg.antiVerbatim != avDefault {
+	if cfg.antiVerbatimSet && cfg.antiVerbatim < 0 {
 		return nil, fmt.Errorf("text: AntiVerbatim(%d) must be >= 0", cfg.antiVerbatim)
 	}
 	if !hasContent(corpus) {
@@ -64,11 +63,11 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	if cfg.minSupport < 1 || cfg.minSupport > 65535 {
 		return nil, fmt.Errorf("text: MinSupport(%d) out of range 1..65535", cfg.minSupport)
 	}
-	maxVerbatim := -1 // AntiVerbatim(0): steering off
-	if cfg.antiVerbatim != 0 {
-		window := cfg.antiVerbatim
-		if window == avDefault {
-			window = cfg.order + 2
+	maxVerbatim := -1
+	if !cfg.antiVerbatimSet || cfg.antiVerbatim > 0 {
+		window := cfg.order + 2
+		if cfg.antiVerbatimSet {
+			window = cfg.antiVerbatim
 		}
 		maxVerbatim = max(2, min(window, maxOrder))
 	}
@@ -76,14 +75,13 @@ func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	vocab := interned.NewVocabulary()
 	encoded := vocab.InternCorpus(corpus)
 
-	chain, revChain, messages := buildModels(encoded, interned.BackoffConfig{MaxOrder: maxOrder, MinOrder: cfg.minOrder, MinSupport: cfg.minSupport, MaxVerbatim: maxVerbatim}, cfg.antiVerbatim != 0, cfg.bidirectional)
+	chain, revChain, messages := buildModels(encoded, interned.BackoffConfig{MaxOrder: maxOrder, MinOrder: cfg.minOrder, MinSupport: cfg.minSupport, MaxVerbatim: maxVerbatim}, maxVerbatim > 0, cfg.bidirectional)
 
 	g := &Generator{
 		chain:          chain,
 		reverseChain:   revChain,
 		vocab:          vocab,
 		defaults:       cfg.generationConfig,
-		minOrder:       cfg.minOrder,
 		unknownContext: interned.TokenID(vocab.Size()),
 		messages:       messages,
 	}
@@ -130,17 +128,17 @@ func (g *Generator) Contains(word string) bool {
 	return false
 }
 
+func (g *Generator) minOrder() int {
+	return (interned.ModelSnapshot{Forward: g.chain}).Config().MinOrder
+}
+
 // SetRNG sets the random source for deterministic generation on the generator
 // and any reverse engine. Not safe for concurrent use.
 func (g *Generator) SetRNG(r *rand.Rand) {
 	g.fixedRNG = r != nil
-	if s, ok := g.chain.(barkov.RNGSettable); ok {
-		s.SetRNG(r)
-	}
+	g.chain.SetRNG(r)
 	if g.reverseChain != nil {
-		if s, ok := g.reverseChain.(barkov.RNGSettable); ok {
-			s.SetRNG(r)
-		}
+		g.reverseChain.SetRNG(r)
 	}
 }
 
@@ -151,16 +149,9 @@ func (g *Generator) MessageSet() *interned.MessageSet { return g.messages }
 // States iterates all states at the given order (1..MaxOrder) as decoded
 // string token slices with their observation counts.
 func (g *Generator) States(order int) iter.Seq2[[]string, uint32] {
-	bc, ok := g.chain.(interface {
-		States(int) iter.Seq2[[]interned.TokenID, uint32]
-	})
-	if !ok {
-		return func(yield func([]string, uint32) bool) {}
-	}
 	return func(yield func([]string, uint32) bool) {
-		for tokens, count := range bc.States(order) {
-			words := g.vocab.DecodeTokens(tokens)
-			if !yield(words, count) {
+		for tokens, count := range g.chain.States(order) {
+			if !yield(g.vocab.DecodeTokens(tokens), count) {
 				return
 			}
 		}
@@ -173,7 +164,7 @@ func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiV
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		chain = interned.BuildBackoff(cfg, encoded).(interned.BackoffChain)
+		chain = interned.BuildBackoff(cfg, encoded)
 	}()
 
 	if antiVerbatim {
@@ -195,7 +186,7 @@ func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiV
 				slices.Reverse(rev)
 				reversedEncoded[i] = rev
 			}
-			revChain = interned.BuildBackoff(cfg, reversedEncoded).(interned.BackoffChain)
+			revChain = interned.BuildBackoff(cfg, reversedEncoded)
 		}()
 	}
 

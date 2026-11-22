@@ -35,11 +35,11 @@ func WithTrace(t *Trace) GenOption {
 
 // startAttempt returns the attempt for these halves, with bwd in walk order,
 // or nil when nothing is traced
-func (g *Generator) startAttempt(gc *genConfig, fwd []interned.TokenID, fwdErr error, bwd []interned.TokenID, bwdErr error) *Attempt {
+func (g *Generator) startAttempt(gc *genConfig, fallback bool, fwd []interned.TokenID, fwdErr error, bwd []interned.TokenID, bwdErr error) *Attempt {
 	if gc.trace == nil {
 		return nil
 	}
-	a := &Attempt{ForwardErr: fwdErr, BackwardErr: bwdErr, Fallback: gc.fallback}
+	a := &Attempt{ForwardErr: fwdErr, BackwardErr: bwdErr, Fallback: fallback}
 	if fwd != nil {
 		a.Forward = g.vocab.DecodeTokens(fwd)
 	}

@@ -276,6 +276,7 @@ func TestNewErrors(t *testing.T) {
 		{"order too low", smallCorpus, []text.Option{text.Order(1)}},
 		{"order too high", smallCorpus, []text.Option{text.Order(9)}},
 		{"zero retries", smallCorpus, []text.Option{text.Retries(0)}},
+		{"negative anti-verbatim", smallCorpus, []text.Option{text.AntiVerbatim(-1)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
