@@ -91,11 +91,15 @@ func (arrayKeyWalker[T, K]) stream(ctx context.Context, chain GenerativeChain[T]
 	}
 }
 
-// keyBorrower marks chains whose Move never retains its key, so walks can pass scratch
-type keyBorrower interface{ borrowsStateKey() }
-
-func (*Chain[T]) borrowsStateKey()           {}
-func (*CompressedChain[T]) borrowsStateKey() {}
+// Match concrete built-ins, not an interface: embedding *Chain would promote
+// an unexported marker method onto a wrapper whose Move retains its key
+func borrowsStateKey[T comparable](chain GenerativeChain[T]) bool {
+	switch chain.(type) {
+	case *Chain[T], *CompressedChain[T]:
+		return true
+	}
+	return false
+}
 
 func genIterSingle[T comparable](
 	ctx context.Context,
@@ -121,8 +125,7 @@ func genIterSingle[T comparable](
 
 		encoder := chain.Encoder()
 		move := func() (T, error) { return chain.Move(encoder.Encode(state)) }
-		appendEnc, canAppend := encoder.(AppendEncoder[T])
-		if _, borrows := chain.(keyBorrower); canAppend && borrows {
+		if appendEnc, canAppend := encoder.(AppendEncoder[T]); canAppend && borrowsStateKey(chain) {
 			scratch := make([]byte, 0, 256)
 			move = func() (T, error) {
 				scratch = appendEnc.AppendEncoded(scratch[:0], state)
