@@ -9,10 +9,8 @@ import (
 	"github.com/soumitradev/barkov/v2/interned"
 )
 
-// Generate returns one generated message as tokens. Seed words that survive
-// vocabulary lookup lead the output (or sit mid-sentence under SeedMiddle).
-// It retries on anti-verbatim, length or support rejection up to Retries,
-// and returns context and barkov errors unchanged.
+// Generate returns one generated message as tokens, retrying validation and
+// support rejections up to Retries. Context and barkov errors return unchanged.
 func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, error) {
 	gc := genConfig{generationConfig: g.defaults}
 	for _, opt := range opts {
@@ -49,8 +47,7 @@ func (g *Generator) Generate(ctx context.Context, opts ...GenOption) ([]string, 
 	return fallback.generate(ctx, &gc, true)
 }
 
-// withWalk returns g, or a copy walking views of its chains for per-call
-// walk options. The model tables are shared, never modified.
+// withWalk returns a shallow copy with per-call chain views; tables stay shared.
 func (g *Generator) withWalk(gc *genConfig) *Generator {
 	if gc.escape <= 0 && !gc.noSteering {
 		return g
@@ -116,8 +113,7 @@ func (g *Generator) Sentence(ctx context.Context, opts ...GenOption) (string, er
 	return strings.Join(out, " "), nil
 }
 
-// internSeed maps seed words to TokenIDs, dropping any not in the vocabulary
-// after falling back to lowercase. Returns nil (unseeded) when nothing survives.
+// internSeed resolves seed words (exact, then lowercased), returning nil if none match.
 func (g *Generator) internSeed(words []string) []interned.TokenID {
 	if len(words) == 0 {
 		return nil
@@ -140,7 +136,6 @@ func (g *Generator) internSeed(words []string) []interned.TokenID {
 	return seed
 }
 
-// genOptions assembles the core generation options for one attempt.
 func (g *Generator) genOptions(seed []interned.TokenID, maxTokens, threads int) []barkov.GenOption[interned.TokenID] {
 	opts := make([]barkov.GenOption[interned.TokenID], 0, 4)
 	if len(seed) > 0 {
@@ -158,7 +153,6 @@ func (g *Generator) genOptions(seed []interned.TokenID, maxTokens, threads int) 
 	return opts
 }
 
-// retryableAttempt rejects this candidate without weakening model constraints.
 func retryableAttempt(err error) bool {
 	return errors.Is(err, barkov.ErrSentenceFailedValidation) || errors.Is(err, barkov.ErrInsufficientSupport)
 }

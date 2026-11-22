@@ -6,16 +6,10 @@ import (
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// Validate reports whether tokens satisfy the rules Generate imposes on its
-// output under opts: at most MaxTokens, not a whole corpus message, no copied
-// run as long as the copy-steering window (unless WithoutCopySteering), and
-// not a piece of one message under WithoutFragments. Callers that edit a
-// generated output use it to keep the same contract. It checks the whole
-// output for copied runs, so it is stricter than Generate, which steers only
-// the tokens it adds: a copied seed, a SeedMiddle join without
-// WithSpliceValidation, or WithVerbatimFallback output can pass Generate and
-// fail here. A failure wraps barkov.ErrSentenceFailedValidation; words outside
-// the vocabulary match no corpus text.
+// Validate checks whether tokens satisfy Generate's output rules under opts
+// (MaxTokens, whole-message, copied runs unless WithoutCopySteering, and
+// WithoutFragments). It inspects the whole output, so it is stricter than
+// Generate's walk-only steering; failures wrap barkov.ErrSentenceFailedValidation.
 func (g *Generator) Validate(tokens []string, opts ...GenOption) error {
 	gc := genConfig{generationConfig: g.defaults}
 	for _, opt := range opts {

@@ -7,33 +7,25 @@ import (
 	"github.com/soumitradev/barkov/v2/interned"
 )
 
-// Start and Unknown stand in for context that isn't a word: the start of a
-// message, and the unseen history before a mid-sentence seed
+// Start and Unknown stand in for non-word context: message start and unseen
+// history before a mid-sentence seed.
 const (
 	Start   = "\x00start"
 	Unknown = "\x00unknown"
 )
 
-// Walk places the seed in generated tokens and says how they were walked, so
-// Explain can rebuild the context of every step
+// Walk describes how tokens were walked so Explain can rebuild each step's context.
 type Walk struct {
-	// Seed is the seed's index and SeedLen its length; 0 means unseeded
-	Seed, SeedLen int
-	// Middle walks start from unknown history instead of a message start
-	Middle bool
-	// Backward means the tokens before the seed were walked backwards from it
-	Backward bool
-	// HiddenSeed leading seed tokens were left out of the starting context
-	HiddenSeed int
-	// History is the context sampled before a seed shorter than MinOrder, and
-	// BackwardHistory the context after it, both in message order
-	History, BackwardHistory []string
-	// Unsteered walks had copy steering off
-	Unsteered bool
+	Seed, SeedLen   int // seed position and length; 0 means unseeded
+	Middle          bool
+	Backward        bool
+	HiddenSeed      int      // leading seed tokens excluded from the starting context
+	History         []string // sampled history before a short seed, in message order
+	BackwardHistory []string // sampled history after a short seed, in message order
+	Unsteered       bool
 }
 
-// Choice is one follower a context offers. End is the message ending there,
-// or for a backward step, starting there.
+// Choice is one follower a context offers; End marks message end (or start when backward).
 type Choice struct {
 	Token   string
 	End     bool
@@ -41,37 +33,29 @@ type Choice struct {
 	Steered bool
 }
 
-// Context is what one context length offered at a step. Words read in
-// message order for both directions.
+// Context is what one context order offered at a step, with Words in message order.
 type Context struct {
 	Order        int
 	Words        []string
 	Found        bool
 	Observations uint32
 	Supported    bool
-	// Choices is sorted by count, most common first
-	Choices []Choice
+	Choices      []Choice // sorted by count, most common first
 }
 
-// Step explains one token a walk chose, or where it stopped
+// Step explains one chosen token or stop position (len(tokens) forward, -1 backward).
 type Step struct {
-	// Index is the token's position. A forward walk stops at len(tokens) and
-	// a backward walk at -1.
 	Index    int
 	Token    string
 	End      bool
 	Backward bool
-	// Contexts run from the longest to the shortest
-	Contexts []Context
-	// Used is the order the walk sampled from, or 0 when none would have
-	// offered this token, which means the tokens weren't walked as w says
+	Contexts []Context // longest order to shortest
+	// Used is the sampled order, or 0 when no order offered this token under w
 	Used int
 }
 
-// Explain rebuilds each step of a walk that produced tokens: every context
-// order the walk tried, what each offered, and which one it sampled from.
-// Seed tokens are given, not chosen, so they get no step. It describes the
-// longest-context walk, not one under WithEscape.
+// Explain rebuilds every chosen step of a longest-context walk (not WithEscape).
+// Seed tokens get no step.
 func (g *Generator) Explain(tokens []string, w Walk) ([]Step, error) {
 	if w.Seed < 0 || w.SeedLen < 0 || w.Seed+w.SeedLen > len(tokens) || w.HiddenSeed > w.SeedLen {
 		return nil, fmt.Errorf("text: seed %d+%d does not fit %d tokens", w.Seed, w.SeedLen, len(tokens))
@@ -117,8 +101,6 @@ func (g *Generator) Explain(tokens []string, w Walk) ([]Step, error) {
 	return steps, nil
 }
 
-// explainStep explains choosing tokens[i] (or ending, when i is outside
-// them) after walked, the tokens so far in walk order
 func (g *Generator) explainStep(chain interned.BackoffChain, pad interned.TokenID, walked []interned.TokenID, tokens []string, ids []interned.TokenID, i int, backward bool) Step {
 	window := make([]interned.TokenID, chain.StateSize())
 	for k := range window {
@@ -170,7 +152,6 @@ func (g *Generator) contextWords(chain interned.BackoffChain, window []interned.
 	return words
 }
 
-// lookup interns words the model knows; the rest match no context
 func (g *Generator) lookup(words []string) []interned.TokenID {
 	ids := make([]interned.TokenID, len(words))
 	for i, w := range words {

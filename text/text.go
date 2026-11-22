@@ -25,18 +25,12 @@ type Generator struct {
 	fixedRNG       bool
 	unknownContext interned.TokenID // absent from the immutable trained vocabulary
 
-	// messages holds fnv digests of every complete corpus message, so a
-	// short output that reproduces a whole message is caught even when it
-	// is too short for any n-gram window. nil when anti-verbatim is disabled.
+	// Whole-message digests catch short verbatim outputs; nil when anti-verbatim is off
 	messages *interned.MessageSet
 }
 
-// New builds a Generator from a pre-tokenized corpus (each inner slice is
-// one message's tokens; text does no tokenization itself). It builds the
-// vocabulary, interns the corpus, and constructs the engine internally:
-// a variable-order backoff chain that samples where the corpus genuinely
-// branches and steers around verbatim reproductions during the walk. It
-// returns an error on an empty or unusable corpus or an invalid option.
+// New builds a Generator from pre-tokenized corpus messages using a
+// variable-order backoff chain with copy steering.
 func New(corpus [][]string, opts ...Option) (*Generator, error) {
 	cfg := defaultConfig()
 	for _, opt := range opts {
@@ -99,20 +93,16 @@ func hasContent(corpus [][]string) bool {
 	return false
 }
 
-// Chain returns the underlying engine for callers who need the full core
-// API (raw barkov.Gen, custom validators, state inspection). The tokens it
-// speaks are interned.TokenID; use Vocab to translate.
+// Chain returns the forward engine operating on interned.TokenIDs.
 func (g *Generator) Chain() barkov.GenerativeChain[interned.TokenID] { return g.chain }
 
-// ReverseChain returns the reverse engine when constructed with Bidirectional(),
-// or nil otherwise.
+// ReverseChain returns the reverse engine when Bidirectional() was set, else nil.
 func (g *Generator) ReverseChain() barkov.GenerativeChain[interned.TokenID] { return g.reverseChain }
 
-// Vocab returns the vocabulary that maps between strings and the TokenIDs
-// the Chain uses.
+// Vocab returns the string-to-TokenID vocabulary shared by the chains.
 func (g *Generator) Vocab() *interned.Vocabulary { return g.vocab }
 
-// Contains reports whether word exists in the vocabulary (tested exact, then lowercased).
+// Contains reports whether word exists in the vocabulary (exact, then lowercased).
 func (g *Generator) Contains(word string) bool {
 	if g == nil || g.vocab == nil {
 		return false
@@ -132,8 +122,7 @@ func (g *Generator) minOrder() int {
 	return (interned.ModelSnapshot{Forward: g.chain}).Config().MinOrder
 }
 
-// SetRNG sets the random source for deterministic generation on the generator
-// and any reverse engine. Not safe for concurrent use.
+// SetRNG sets a deterministic random source on both chains; not concurrency-safe.
 func (g *Generator) SetRNG(r *rand.Rand) {
 	g.fixedRNG = r != nil
 	g.chain.SetRNG(r)
@@ -142,12 +131,10 @@ func (g *Generator) SetRNG(r *rand.Rand) {
 	}
 }
 
-// MessageSet returns the whole-message digest set built from the corpus,
-// or nil if AntiVerbatim(0) was set.
+// MessageSet returns the whole-message digest set, or nil when anti-verbatim is off.
 func (g *Generator) MessageSet() *interned.MessageSet { return g.messages }
 
-// States iterates all states at the given order (1..MaxOrder) as decoded
-// string token slices with their observation counts.
+// States iterates decoded states and observation counts at order 1..MaxOrder.
 func (g *Generator) States(order int) iter.Seq2[[]string, uint32] {
 	return func(yield func([]string, uint32) bool) {
 		for tokens, count := range g.chain.States(order) {
