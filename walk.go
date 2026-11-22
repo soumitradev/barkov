@@ -14,12 +14,10 @@ type keyWalker[T comparable] interface {
 	stream(ctx context.Context, chain GenerativeChain[T], cfg *genConfig[T]) iter.Seq2[T, error]
 }
 
-// arrayKeyWalker is the keyWalker for chains keyed by K = [N]T. It is zero
-// sized so picking one per call never allocates.
+// arrayKeyWalker is zero sized so picking one per call never allocates
 type arrayKeyWalker[T, K comparable] struct{}
 
-// keyWalkerFor returns nil when chain has no FastMoverKey for its state size.
-// Go can't parameterize an interface by an int const, hence one case per N.
+// Go can't parameterize an interface by an int const, hence a case per N
 func keyWalkerFor[T comparable](chain GenerativeChain[T]) keyWalker[T] {
 	switch chain.StateSize() {
 	case 1:
@@ -54,8 +52,6 @@ func arrayKey[K, T any](state []T) K {
 	return *(*K)(unsafe.Pointer(&state[0]))
 }
 
-// collect is Gen's walk without options: no iterator, no config, and the
-// state window on the stack
 func (arrayKeyWalker[T, K]) collect(chain GenerativeChain[T]) ([]T, error) {
 	fm := chain.(FastMoverKey[K, T])
 	sentinels := chain.Sentinels()
@@ -95,8 +91,7 @@ func (arrayKeyWalker[T, K]) stream(ctx context.Context, chain GenerativeChain[T]
 	}
 }
 
-// keyBorrower marks chains whose Move never retains its argument, so the walk
-// can hand them keys backed by reused scratch
+// keyBorrower marks chains whose Move never retains its key, so walks can pass scratch
 type keyBorrower interface{ borrowsStateKey() }
 
 func (*Chain[T]) borrowsStateKey()           {}
@@ -138,9 +133,8 @@ func genIterSingle[T comparable](
 	}
 }
 
-// walk streams one attempt: the seed, then a token per move until End. move
-// steps from the current contents of state, which walk shifts after each token
-// rather than passing it, so a stack-backed state stays on the stack.
+// move reads state rather than taking it because an indirect call leaks its
+// arguments, which would push a stack-backed state onto the heap
 func walk[T comparable](
 	ctx context.Context,
 	cfg *genConfig[T],
@@ -190,8 +184,6 @@ func walk[T comparable](
 	}
 }
 
-// canceled skips the select entirely for contexts that can't be canceled,
-// which is the common case
 func canceled(done <-chan struct{}) bool {
 	if done == nil {
 		return false
@@ -209,8 +201,7 @@ func shiftState[T any](state []T, next T) {
 	state[len(state)-1] = next
 }
 
-// fillInitialState uses an explicit state when supplied, otherwise the seed.
-// Only seed tokens are emitted, independently of the history used by the walk.
+// fillInitialState prefers an explicit initial state to the seed
 func fillInitialState[T comparable](state, initial, seed []T, begin T) {
 	if initial != nil {
 		seed = initial
@@ -224,8 +215,7 @@ func fillInitialState[T comparable](state, initial, seed []T, begin T) {
 	copy(state[len(state)-len(seed):], seed)
 }
 
-// walkGuard stops a walk that runs past its token limit, repeats a cycle or
-// fails its n-gram validator
+// walkGuard stops walks that run too long, cycle or fail the n-gram validator
 type walkGuard[T comparable] struct {
 	limit     int // 0 for no limit
 	emitted   int
@@ -236,8 +226,7 @@ type walkGuard[T comparable] struct {
 	history   []T
 }
 
-// emitSeed validates the complete seed before yielding and checks cancellation
-// between seed tokens just as the walk does between generated tokens
+// emitSeed checks the whole seed against the limit before yielding any of it
 func (g *walkGuard[T]) emitSeed(ctx context.Context, seed []T, sentinels Sentinels[T], yield func(T, error) bool) bool {
 	var zero T
 	if err := ctx.Err(); err != nil {
@@ -272,7 +261,6 @@ func (g *walkGuard[T]) emitSeed(ctx context.Context, seed []T, sentinels Sentine
 	return true
 }
 
-// admit checks next, generated after state, against every stopping rule
 func (g *walkGuard[T]) admit(state []T, next T) error {
 	g.emitted++
 	if g.limit > 0 && g.emitted > g.limit {
@@ -302,21 +290,18 @@ func appendHistory[T any](history []T, token T, width int) []T {
 	return append(history, token)
 }
 
-// cycleCheckAfter is how many tokens a walk generates before the cycle
-// guard watches it, so ordinary messages never pay for it.
+// Ordinary messages end before the cycle guard starts watching
 const cycleCheckAfter = 32
 
-// cycleGuard notices a walk stuck repeating a short cycle: run[p-1] counts
-// how many tokens in a row matched the token p before them.
+// run[p-1] counts how many tokens in a row matched the token p before them
 type cycleGuard[T comparable] struct {
 	inline [8]uint8
 	extra  []uint8
 }
 
-// repeats reports whether next, emitted after state, extends a cycle with
-// a period of at most the state size that has now run for three state
-// lengths. By then the walk has revisited one state several times and
-// chosen the same way out each time.
+// repeats reports a cycle of period at most the state size that has run for
+// three state lengths. By then the walk has left one state the same way
+// several times.
 func (g *cycleGuard[T]) repeats(state []T, next T) bool {
 	n := len(state)
 	var run []uint8

@@ -6,10 +6,9 @@ import (
 	"iter"
 )
 
-// GenIter streams tokens from a generation attempt as an iter.Seq2.
-// The second return is an error; on the first non-nil error the iterator
-// stops yielding. ctx cancellation is checked between tokens, including seeds
-// and buffered results. Parallel workers finish before the iterator returns.
+// GenIter streams one generation attempt, stopping at the first error. ctx is
+// checked between tokens, including seeds and buffered results, and parallel
+// workers finish before the iterator returns.
 func GenIter[T comparable](
 	ctx context.Context,
 	chain GenerativeChain[T],
@@ -42,13 +41,8 @@ func GenIter[T comparable](
 	}
 }
 
-// Gen collects the iterator into a slice.
-//
-// For the common unconfigured call (no seed, validators, threading, or
-// stuck detection) on a chain that implements FastMoverKey, Gen skips the
-// iterator machinery entirely and runs the walk in a plain loop: same
-// MoveKey sequence, same RNG draws, same output, without the per-token
-// yield call or the per-call config/closure allocations.
+// Gen collects GenIter into a slice. A call without options on a FastMoverKey
+// chain skips the iterator for a plain loop with the same output.
 func Gen[T comparable](
 	ctx context.Context,
 	chain GenerativeChain[T],
@@ -73,7 +67,6 @@ func Gen[T comparable](
 	return collectAttempt(genIterSingle(ctx, chain, cfg), cfg.outputValidator)
 }
 
-// collectAttempt collects one attempt and checks it against valid, if set
 func collectAttempt[T any](attempt iter.Seq2[T, error], valid func([]T) bool) ([]T, error) {
 	out, err := collect(attempt)
 	if err != nil {
@@ -100,7 +93,6 @@ func collect[T any](seq iter.Seq2[T, error]) ([]T, error) {
 	return out, nil
 }
 
-// replay yields buffered tokens, still stopping at cancellation
 func replay[T any](ctx context.Context, tokens []T, yield func(T, error) bool) {
 	for _, tok := range tokens {
 		if err := ctx.Err(); err != nil {
