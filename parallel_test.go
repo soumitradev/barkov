@@ -51,7 +51,8 @@ func TestStuckCacheCountsEachParallelCallOnce(t *testing.T) {
 		_, err := Gen(ctx, chain, opts...)
 		return err
 	}
-	failCalls := func(ctx context.Context, cache *stuck.Cache, calls int) {
+	failCalls := func(t *testing.T, ctx context.Context, cache *stuck.Cache, calls int) {
+		t.Helper()
 		for range calls {
 			if err := gen(ctx, cache, reject); err == nil {
 				t.Fatal("rejected output succeeded")
@@ -61,21 +62,23 @@ func TestStuckCacheCountsEachParallelCallOnce(t *testing.T) {
 
 	t.Run("below threshold", func(t *testing.T) {
 		cache := stuck.NewCacheWithOptions(5, time.Hour)
-		failCalls(context.Background(), cache, 4)
+		failCalls(t, context.Background(), cache, 4)
 		if err := gen(context.Background(), cache); err != nil {
 			t.Fatalf("4 failed calls marked the seed stuck at a threshold of 5: %v", err)
 		}
 	})
 	t.Run("at threshold", func(t *testing.T) {
 		cache := stuck.NewCacheWithOptions(5, time.Hour)
-		failCalls(context.Background(), cache, 5)
+		failCalls(t, context.Background(), cache, 5)
 		if err := gen(context.Background(), cache); !errors.Is(err, ErrStateNotFound) {
 			t.Fatalf("5 failed calls did not mark the seed stuck: %v", err)
 		}
 	})
 	t.Run("canceled", func(t *testing.T) {
 		cache := stuck.NewCacheWithOptions(1, time.Hour)
-		failCalls(canceledContext(), cache, 1)
+		if err := gen(canceledContext(), cache); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled call returned %v, want context.Canceled", err)
+		}
 		if err := gen(context.Background(), cache); err != nil {
 			t.Fatalf("a canceled call marked the seed stuck: %v", err)
 		}
