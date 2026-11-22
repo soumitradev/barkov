@@ -159,10 +159,14 @@ const (
 	allSteered                     // steering vetoed every supported follower
 )
 
+// errAllSteered is built once, since steered walks dead-end often enough
+// that formatting it per failed step shows up in allocation profiles
+var errAllSteered = fmt.Errorf("barkov: all continuations extend a verbatim run: %w", barkov.ErrSentenceFailedValidation)
+
 func (b *backoffCore) noContinuationErr(failure stepFailure) error {
 	switch failure {
 	case allSteered:
-		return fmt.Errorf("barkov: all continuations extend a verbatim run: %w", barkov.ErrSentenceFailedValidation)
+		return errAllSteered
 	case thinContext:
 		return fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
 			b.cfg.MinOrder, b.cfg.MaxOrder, b.cfg.MinSupport, barkov.ErrInsufficientSupport)

@@ -382,19 +382,24 @@ func TestBackoffMoveKeyAllocs(t *testing.T) {
 		big = append(big, []string{"a", "b", fmt.Sprint("x", i)})
 	}
 
+	// Without "q z b d" no order offers a follower steering allows
+	deadEnd := single[:1]
+
 	cases := []struct {
-		name   string
-		corpus [][]string
-		cfg    BackoffConfig
-		escape float64
-		mode   steerMode
+		name    string
+		corpus  [][]string
+		cfg     BackoffConfig
+		escape  float64
+		mode    steerMode
+		wantErr error
 	}{
-		{"plain", set, BackoffConfig{MaxOrder: 3, MaxVerbatim: -1}, 0, steerOff},
-		{"single", single, steered, 0, steerSingle},
-		{"set", set, steered, 0, steerSet},
-		{"big", big, steered, 0, steerBig},
-		{"escape", set, steered, 1, steerSet},
-		{"escape big", big, steered, 1, steerBig},
+		{"plain", set, BackoffConfig{MaxOrder: 3, MaxVerbatim: -1}, 0, steerOff, nil},
+		{"single", single, steered, 0, steerSingle, nil},
+		{"set", set, steered, 0, steerSet, nil},
+		{"big", big, steered, 0, steerBig, nil},
+		{"escape", set, steered, 1, steerSet, nil},
+		{"escape big", big, steered, 1, steerBig, nil},
+		{"dead end", deadEnd, steered, 0, steerSingle, barkov.ErrSentenceFailedValidation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -406,8 +411,8 @@ func TestBackoffMoveKeyAllocs(t *testing.T) {
 					t.Fatalf("corpus gives steering mode %d, want %d", mode, tc.mode)
 				}
 			}
-			if _, err := chain.MoveKey(key); err != nil {
-				t.Fatalf("MoveKey: %v", err)
+			if _, err := chain.MoveKey(key); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("MoveKey error = %v, want %v", err, tc.wantErr)
 			}
 			if allocs := testing.AllocsPerRun(100, func() { chain.MoveKey(key) }); allocs != 0 {
 				t.Errorf("MoveKey allocates %v times per step, want 0", allocs)
