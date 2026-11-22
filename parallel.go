@@ -43,10 +43,8 @@ func genIterThreaded[T comparable](
 			go func() {
 				defer wg.Done()
 				tokens, err := collectAttempt(genIterSingle(workerCtx, chain, cfg), cfg.outputValidator)
-				select {
-				case resultCh <- result{tokens: tokens, err: err}:
-				case <-workerCtx.Done():
-				}
+				// Each worker sends once into a buffer sized for all of them, so this never blocks
+				resultCh <- result{tokens: tokens, err: err}
 			}()
 		}
 
@@ -61,9 +59,6 @@ func genIterThreaded[T comparable](
 				canceled := errors.Is(res.err, context.Canceled) || errors.Is(res.err, context.DeadlineExceeded)
 				if lastErr == nil || !canceled {
 					lastErr = res.err
-				}
-				if cfg.stuckCache != nil && !canceled {
-					cfg.stuckCache.RecordFailure(seedKey)
 				}
 				// A missing state fails every worker the same way
 				if errors.Is(res.err, ErrStateNotFound) {
@@ -82,14 +77,16 @@ func genIterThreaded[T comparable](
 			return
 		}
 
-		// Caller cancellation must not become an empty success if workers drop their results
+		var zero T
 		if ctx.Err() != nil {
-			lastErr = ctx.Err()
+			yield(zero, ctx.Err())
+			return
 		}
-		if lastErr != nil {
-			var zero T
-			yield(zero, lastErr)
+		// One failed call is one failure, however many workers it ran
+		if cfg.stuckCache != nil {
+			cfg.stuckCache.RecordFailure(seedKey)
 		}
+		yield(zero, lastErr)
 	}
 }
 
