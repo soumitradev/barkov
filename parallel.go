@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strconv"
 	"sync"
 )
 
@@ -22,8 +23,10 @@ func genIterThreaded[T comparable](
 			err    error
 		}
 
-		encoder := chain.Encoder()
-		seedKey := encoder.Encode(cfg.seed)
+		var seedKey string
+		if cfg.stuckCache != nil {
+			seedKey = stuckKey(chain.Encoder(), cfg)
+		}
 
 		// Short-circuit if this seed is known-stuck
 		if cfg.stuckCache != nil && cfg.stuckCache.IsStuck(seedKey) {
@@ -123,4 +126,12 @@ func genIterThreaded[T comparable](
 			yield(zero, lastErr)
 		}
 	}
+}
+
+// stuckKey identifies a walk's starting point for the stuck cache. The
+// initial state decides where the walk starts and the seed what it must
+// emit, so both are part of the key. Lengths keep the two encodings apart.
+func stuckKey[T comparable](encoder StateEncoder[T], cfg *genConfig[T]) string {
+	seed := encoder.Encode(cfg.seed)
+	return strconv.Itoa(len(seed)) + ":" + seed + encoder.Encode(cfg.initialState)
 }

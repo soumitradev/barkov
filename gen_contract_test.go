@@ -136,13 +136,18 @@ func (c *streamChain) MoveKey([1]string) (string, error) {
 	if c.count > 10000 {
 		return END, nil
 	}
-	return "token", nil
+	// Alternate, since one token repeated is a cycle Gen stops
+	return []string{"tick", "tock"}[c.count%2], nil
 }
 
 func TestValidationHistoryRemainsBounded(t *testing.T) {
 	pool := &smallPool{}
 	calls := 0
-	out, err := Gen(context.Background(), &streamChain{}, WithSlicePool[string](pool), WithValidator(func(window []string) bool { calls++; return slices.Equal(window, []string{"token", "token", "token"}) }))
+	alternating := func(window []string) bool {
+		calls++
+		return len(window) == 3 && window[0] == window[2] && window[0] != window[1]
+	}
+	out, err := Gen(context.Background(), &streamChain{}, WithSlicePool[string](pool), WithoutTokenLimit[string](), WithValidator(alternating))
 	if err != nil || len(out) != 10000 || calls != 9998 {
 		t.Fatalf("tokens=%d checks=%d err=%v", len(out), calls, err)
 	}

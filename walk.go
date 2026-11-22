@@ -26,6 +26,7 @@ func genFastCollect[T comparable, K comparable](
 	}
 
 	out := make([]T, 0, 32)
+	var cycles cycleGuard[T]
 	for {
 		next, err := fm.MoveKey(*(*K)(unsafe.Pointer(&state[0])))
 		if err != nil {
@@ -36,6 +37,12 @@ func genFastCollect[T comparable, K comparable](
 				return nil, nil // match the iterator path's nil-on-empty
 			}
 			return out, nil
+		}
+		if len(out) == DefaultMaxTokens {
+			return nil, tokenLimitError(DefaultMaxTokens)
+		}
+		if len(out) >= cycleCheckAfter && cycles.repeats(state, next) {
+			return nil, cycleError()
 		}
 		out = append(out, next)
 		copy(state, state[1:])
@@ -72,8 +79,8 @@ func emitSeed[T comparable](ctx context.Context, cfg *genConfig[T], sentinels Se
 			emitted++
 		}
 	}
-	if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
-		yield(zero, tokenLimitError(cfg.maxTokens))
+	if limit := cfg.tokenLimit(); limit > 0 && emitted > limit {
+		yield(zero, tokenLimitError(limit))
 		return history, 0, false
 	}
 	done := ctx.Done()
@@ -108,6 +115,50 @@ func appendHistory[T any](history []T, token T, width int) []T {
 		history = history[:keep]
 	}
 	return append(history, token)
+}
+
+// cycleCheckAfter is how many tokens a walk generates before the cycle
+// guard watches it, so ordinary messages never pay for it.
+const cycleCheckAfter = 32
+
+// cycleGuard notices a walk stuck repeating a short cycle: run[p-1] counts
+// how many tokens in a row matched the token p before them.
+type cycleGuard[T comparable] struct {
+	inline [8]uint8
+	extra  []uint8
+}
+
+// repeats reports whether next, emitted after state, extends a cycle with
+// a period of at most the state size that has now run for three state
+// lengths. By then the walk has revisited one state several times and
+// chosen the same way out each time.
+func (g *cycleGuard[T]) repeats(state []T, next T) bool {
+	n := len(state)
+	var run []uint8
+	if n <= len(g.inline) {
+		run = g.inline[:n]
+	} else {
+		if len(g.extra) < n {
+			g.extra = make([]uint8, n)
+		}
+		run = g.extra[:n]
+	}
+	limit := min(3*n, 255)
+	lim := uint8(limit)
+	for p := 1; p <= n; p++ {
+		if state[n-p] != next {
+			run[p-1] = 0
+			continue
+		}
+		if run[p-1]++; run[p-1] >= lim {
+			return true
+		}
+	}
+	return false
+}
+
+func cycleError() error {
+	return fmt.Errorf("barkov: %w: %w", ErrWalkCycle, ErrSentenceFailedValidation)
 }
 
 func tokenLimitError(limit int) error {
@@ -214,6 +265,9 @@ func genIterSingle[T comparable](
 		if !keepGoing {
 			return
 		}
+		limit := cfg.tokenLimit()
+		var cycles cycleGuard[T]
+		generated := 0
 
 		// See genIterSingleFast for the rationale on hoisting ctx.Done().
 		done := ctx.Done()
@@ -246,9 +300,14 @@ func genIterSingle[T comparable](
 			}
 
 			emitted++
-			if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
+			if limit > 0 && emitted > limit {
 				var zero T
-				yield(zero, tokenLimitError(cfg.maxTokens))
+				yield(zero, tokenLimitError(limit))
+				return
+			}
+			if generated++; generated > cycleCheckAfter && cycles.repeats(state, next) {
+				var zero T
+				yield(zero, cycleError())
 				return
 			}
 
@@ -319,6 +378,9 @@ func genIterSingleFast[T comparable, K comparable](
 		if !keepGoing {
 			return
 		}
+		limit := cfg.tokenLimit()
+		var cycles cycleGuard[T]
+		generated := 0
 
 		// Hoist ctx.Done() out of the per-token loop. context.Background()
 		// (and any context with no deadline/cancellation) returns a nil
@@ -354,9 +416,14 @@ func genIterSingleFast[T comparable, K comparable](
 			}
 
 			emitted++
-			if cfg.maxTokens > 0 && emitted > cfg.maxTokens {
+			if limit > 0 && emitted > limit {
 				var zero T
-				yield(zero, tokenLimitError(cfg.maxTokens))
+				yield(zero, tokenLimitError(limit))
+				return
+			}
+			if generated++; generated > cycleCheckAfter && cycles.repeats(state, next) {
+				var zero T
+				yield(zero, cycleError())
 				return
 			}
 

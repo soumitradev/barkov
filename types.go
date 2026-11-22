@@ -65,4 +65,9 @@ const ErrTokenLimit = errorCause("output exceeded maximum tokens")
 // told to avoid. Like ErrTokenLimit, it comes wrapped with
 // ErrSentenceFailedValidation.
 const ErrCopiesCorpus = errorCause("output copies the corpus")
+
+// ErrWalkCycle means a walk kept repeating the same few tokens, as copy
+// steering can force where every way out of a loop was filtered. It comes
+// wrapped with ErrSentenceFailedValidation, so callers retry it.
+const ErrWalkCycle = errorCause("walk repeats a cycle")
 const ErrGenerationTimeout = errorCause("sentence generation timed out")

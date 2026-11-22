@@ -48,6 +48,22 @@ type genConfig[T comparable] struct {
 	pool            SlicePool[T]
 	outputValidator func([]T) bool
 	maxTokens       int
+	noTokenLimit    bool
+}
+
+// DefaultMaxTokens caps a walk's output when WithMaxTokens doesn't. A walk
+// that runs this long has almost always lost its way back to End.
+const DefaultMaxTokens = 1000
+
+// tokenLimit is the most tokens this call may emit, 0 for no limit.
+func (c *genConfig[T]) tokenLimit() int {
+	switch {
+	case c.noTokenLimit:
+		return 0
+	case c.maxTokens > 0:
+		return c.maxTokens
+	}
+	return DefaultMaxTokens
 }
 
 // WithSeed prepends seed tokens to the generated sequence.
@@ -95,9 +111,15 @@ func WithOutputValidator[T comparable](v func([]T) bool) GenOption[T] {
 // WithMaxTokens sets a maximum length (in non-sentinel tokens) for the
 // generated sequence, including any seed tokens. If generation reaches
 // this limit without hitting the End sentinel, the attempt is aborted
-// with ErrSentenceFailedValidation.
+// with ErrSentenceFailedValidation. 0 keeps DefaultMaxTokens.
 func WithMaxTokens[T comparable](n int) GenOption[T] {
-	return func(c *genConfig[T]) { c.maxTokens = n }
+	return func(c *genConfig[T]) { c.maxTokens, c.noTokenLimit = n, false }
+}
+
+// WithoutTokenLimit lets a walk run until End or cancellation, for
+// streams consumed through GenIter. Cycle detection still applies.
+func WithoutTokenLimit[T comparable]() GenOption[T] {
+	return func(c *genConfig[T]) { c.maxTokens, c.noTokenLimit = 0, true }
 }
 
 // WithNGramValidator installs a WindowValidator, a per-window validator
