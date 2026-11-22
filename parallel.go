@@ -55,7 +55,7 @@ func genIterThreaded[T comparable](
 				workerCfg := *cfg
 				workerCfg.parallelism = 0
 
-				tokens, err := collectAttempt(workerCtx, chain, &workerCfg)
+				tokens, err := collectAttempt(genIterSingle(workerCtx, chain, &workerCfg), workerCfg.outputValidator)
 				if err != nil {
 					select {
 					case resultCh <- result{err: err}:
@@ -103,16 +103,7 @@ func genIterThreaded[T comparable](
 			cancel()
 			wg.Wait()
 
-			for _, tok := range res.tokens {
-				if err := ctx.Err(); err != nil {
-					var zero T
-					yield(zero, err)
-					return
-				}
-				if !yield(tok, nil) {
-					return
-				}
-			}
+			replay(ctx, res.tokens, yield)
 			return
 		}
 

@@ -23,52 +23,22 @@ func GenIter[T comparable](
 		return errorIter[T](err)
 	}
 	if cfg.parallelism > 1 {
-		// genIterThreaded applies cfg.outputValidator inside each worker
-		// rather than decorating here: the
-		// first worker to finish would otherwise win the race and then
-		// fail the whole call instead of letting other workers retry.
+		// Workers check outputs themselves so a fast worker's rejected output
+		// doesn't win the race and fail the call while others could succeed
 		return genIterThreaded(ctx, chain, cfg)
 	}
 	inner := genIterSingle(ctx, chain, cfg)
-	if cfg.outputValidator != nil {
-		return validateOutputIter(ctx, inner, cfg.outputValidator)
+	if cfg.outputValidator == nil {
+		return inner
 	}
-	return inner
-}
-
-// validateOutputIter decorates inner with a whole-output check, without
-// touching the hot loops in walk. It buffers
-// inner's entire sequence (seed tokens plus generated, sentinels
-// excluded, exactly what Gen would return), then either yields
-// ErrSentenceFailedValidation or replays the buffered tokens. This makes
-// generation non-streaming by definition: nothing is yielded until inner
-// completes.
-func validateOutputIter[T comparable](ctx context.Context, inner iter.Seq2[T, error], v func([]T) bool) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		var buf []T
-		for tok, err := range inner {
-			if err != nil {
-				var zero T
-				yield(zero, err)
-				return
-			}
-			buf = append(buf, tok)
-		}
-		if !v(buf) {
+		out, err := collectAttempt(inner, cfg.outputValidator)
+		if err != nil {
 			var zero T
-			yield(zero, fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation))
+			yield(zero, err)
 			return
 		}
-		for _, tok := range buf {
-			if err := ctx.Err(); err != nil {
-				var zero T
-				yield(zero, err)
-				return
-			}
-			if !yield(tok, nil) {
-				return
-			}
-		}
+		replay(ctx, out, yield)
 	}
 }
 
@@ -98,35 +68,48 @@ func Gen[T comparable](
 	}
 
 	if cfg.parallelism > 1 {
-		out := make([]T, 0, 32)
-		for tok, err := range genIterThreaded(ctx, chain, cfg) {
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, tok)
-		}
-		if len(out) == 0 {
-			return nil, nil
-		}
-		return out, nil
+		return collect(genIterThreaded(ctx, chain, cfg))
 	}
-
-	return collectAttempt(ctx, chain, cfg)
+	return collectAttempt(genIterSingle(ctx, chain, cfg), cfg.outputValidator)
 }
 
-func collectAttempt[T comparable](ctx context.Context, chain GenerativeChain[T], cfg *genConfig[T]) ([]T, error) {
+// collectAttempt collects one attempt and checks it against valid, if set
+func collectAttempt[T any](attempt iter.Seq2[T, error], valid func([]T) bool) ([]T, error) {
+	out, err := collect(attempt)
+	if err != nil {
+		return nil, err
+	}
+	if valid != nil && !valid(out) {
+		return nil, fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation)
+	}
+	return out, nil
+}
+
+// collect returns nil for an empty sequence
+func collect[T any](seq iter.Seq2[T, error]) ([]T, error) {
 	out := make([]T, 0, 32)
-	for tok, err := range genIterSingle(ctx, chain, cfg) {
+	for tok, err := range seq {
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, tok)
 	}
-	if cfg.outputValidator != nil && !cfg.outputValidator(out) {
-		return nil, fmt.Errorf("barkov: output failed validation: %w", ErrSentenceFailedValidation)
-	}
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// replay yields buffered tokens, still stopping at cancellation
+func replay[T any](ctx context.Context, tokens []T, yield func(T, error) bool) {
+	for _, tok := range tokens {
+		if err := ctx.Err(); err != nil {
+			var zero T
+			yield(zero, err)
+			return
+		}
+		if !yield(tok, nil) {
+			return
+		}
+	}
 }
