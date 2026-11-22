@@ -2,7 +2,6 @@ package interned
 
 import barkov "github.com/soumitradev/barkov/v2"
 
-// WithEscape implements BackoffChain
 func (b *backoffCore) WithEscape(scale float64) BackoffChain {
 	view := *b
 	view.escape = max(scale, 0)

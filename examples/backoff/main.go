@@ -67,7 +67,7 @@ func main() {
 	// is identical for a given seed.
 	genSeeded := func(seed uint64) string {
 		for attempt := uint64(0); ; attempt++ {
-			chain.SetRNG(rand.New(rand.NewPCG(seed, attempt)))
+			chain.(barkov.RNGSettable).SetRNG(rand.New(rand.NewPCG(seed, attempt)))
 			if out, err := barkov.Gen(context.Background(), chain); err == nil {
 				return strings.Join(vocab.DecodeTokens(out), " ")
 			}

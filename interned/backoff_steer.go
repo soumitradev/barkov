@@ -1,13 +1,11 @@
 package interned
 
-// WithoutVerbatim implements BackoffChain
 func (b *backoffCore) WithoutVerbatim() BackoffChain {
 	view := *b
 	view.cfg.MaxVerbatim = -1
 	return wrapBackoff(&view)
 }
 
-// CopiesRun implements BackoffChain
 func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
 	r := b.cfg.MaxVerbatim
 	if r <= 0 {
