@@ -42,13 +42,15 @@ type genConfig[T comparable] struct {
 	seed            []T
 	initialState    []T
 	validator       func([]T) bool
-	validatorWidth  int // 0 = default; WithNGramValidator requires a positive width
+	validatorWidth  int
 	parallelism     int // 0 = single-threaded; >0 = goroutine count
 	stuckCache      StuckDetector
 	pool            SlicePool[T]
 	outputValidator func([]T) bool
 	maxTokens       int
-	noTokenLimit    bool
+	// Bools sit together so genConfig stays in the 128-byte size class
+	noTokenLimit      bool
+	hasValidatorWidth bool
 }
 
 // DefaultMaxTokens caps a walk's output when WithMaxTokens doesn't. A walk
@@ -68,10 +70,10 @@ func (c *genConfig[T]) tokenLimit() int {
 
 // windowWidth is how many tokens the n-gram validator sees per call
 func (c *genConfig[T]) windowWidth(stateSize int) int {
-	if c.validatorWidth == 0 {
-		return stateSize + 2
+	if c.hasValidatorWidth {
+		return c.validatorWidth
 	}
-	return c.validatorWidth
+	return stateSize + 2
 }
 
 // WithSeed prepends seed tokens to the generated sequence.
@@ -99,7 +101,7 @@ func WithInitialState[T comparable](tokens []T) GenOption[T] {
 func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
 	return func(c *genConfig[T]) {
 		c.validator = v
-		c.validatorWidth = 0
+		c.hasValidatorWidth = false
 	}
 }
 
@@ -138,11 +140,7 @@ func WithoutTokenLimit[T comparable]() GenOption[T] {
 func WithNGramValidator[T comparable](v WindowValidator[T]) GenOption[T] {
 	return func(c *genConfig[T]) {
 		c.validator = v.Validate
-		c.validatorWidth = v.N()
-		if c.validatorWidth == 0 {
-			// Reserve zero for WithValidator's default; an explicit zero is invalid.
-			c.validatorWidth = -1
-		}
+		c.validatorWidth, c.hasValidatorWidth = v.N(), true
 	}
 }
 
@@ -178,7 +176,7 @@ func (c *genConfig[T]) validate() error {
 	if c.maxTokens < 0 {
 		return fmt.Errorf("barkov: maximum tokens must be nonnegative")
 	}
-	if c.validatorWidth < 0 {
+	if c.hasValidatorWidth && c.validatorWidth < 1 {
 		return fmt.Errorf("barkov: validator width must be positive")
 	}
 	return nil
