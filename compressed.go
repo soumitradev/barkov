@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"math/rand/v2"
+	"slices"
 	"sort"
 )
 
@@ -75,150 +76,141 @@ func (c *Chain[T]) Compress() *CompressedChain[T] {
 	return cc
 }
 
-// BuildCompressed builds a CompressedChain directly from a corpus, skipping
-// the map-of-maps intermediate that Build+Compress produces. It eliminates
-// the per-state map[T]uint32 allocations and the subsequent Compress
-// iteration over them.
-//
-// Algorithm:
-//  1. Stream observations into two parallel slices: a dense stateIdx per
-//     observation and the follow token. State keys are interned into an
-//     arena; unique states get sequential uint32 indices.
-//  2. Counting-sort by stateIdx to group observations per state. Uses a
-//     linked-list-style placement (head + next arrays) that needs O(obs)
-//     aux memory instead of a full sorted buffer.
-//  3. For each state group, linear-scan dedupe follow tokens directly into
-//     cc.Choices/cc.CumDist for small groups, or fall back to a reusable
-//     counting map for large groups. Then convert counts to cumulative in
-//     place.
-//
-// Result is identical in behaviour to BuildRaw().Compress() except that the
-// order of entries within a state group is unspecified (Compress also has
-// unspecified order due to Go's random map iteration).
+// BuildCompressed builds a CompressedChain straight from a corpus, skipping
+// the per-state maps of BuildRaw().Compress(). Order within a state is unspecified.
 func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
-	beginSeq := c.beginWindow()
-	maxLen, totalObs := corpusShape(corpus)
-
-	// Observed on the public corpus: numStates ≈ 0.82 * totalObs (fanout
-	// barely >1), so the old estimate of totalObs/4 undershot by ~3.3x,
-	// forcing the map through several rehashes and the slice through
-	// multiple doublings. Using totalObs as the upper bound wastes ~20% in
-	// slack but eliminates all growth cost.
-	estUnique := totalObs + 64
-	stateIdx := make(map[string]uint32, estUnique)
-	stateKeys := make([]string, 0, estUnique)
-	items := make([]T, 0, c.stateSize+maxLen+1)
-
-	pendingState := make([]uint32, 0, totalObs)
-	pendingTok := make([]T, 0, totalObs)
-
-	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
-
-	for _, run := range corpus {
-		items = items[:0]
-		items = append(items, beginSeq...)
-		items = append(items, run...)
-		items = append(items, c.sentinels.End)
-
-		for i := 0; i < len(run)+1; i++ {
-			probeKey := ks.probe(items[i : i+c.stateSize])
-			follow := items[i+c.stateSize]
-			idx, ok := stateIdx[probeKey]
-			if !ok {
-				idx = uint32(len(stateKeys))
-				stableKey := ks.intern(probeKey)
-				stateIdx[stableKey] = idx
-				stateKeys = append(stateKeys, stableKey)
-			}
-			pendingState = append(pendingState, idx)
-			pendingTok = append(pendingTok, follow)
-		}
-	}
-
-	numStates := len(stateKeys)
-	// Per-state linked list of observation indices. head[s] is the latest
-	// observation index for state s (or -1); next[i] is the prior obs idx
-	// sharing the same state.
-	head := make([]int32, numStates)
-	for i := range head {
-		head[i] = -1
-	}
-	next := make([]int32, len(pendingState))
-	for i, s := range pendingState {
-		next[i] = head[s]
-		head[s] = int32(i)
-	}
-
+	keys, states, follows := c.observe(corpus)
+	groups := groupByState(states, len(keys))
 	cc := &CompressedChain[T]{
 		stateSize: c.stateSize,
 		sentinels: c.sentinels,
 		encoder:   c.encoder,
-		Model:     make(map[string]ChoicesIndex, numStates),
-		Choices:   make([]T, 0, totalObs),
-		CumDist:   make([]uint32, 0, totalObs),
+		Model:     make(map[string]ChoicesIndex, len(keys)),
+		Choices:   make([]T, 0, len(follows)),
+		CumDist:   make([]uint32, 0, len(follows)),
 	}
-
-	// Walk each state's linked list; dedupe follows into cc.Choices/CumDist.
-	// Small groups (<=16) dedupe via linear scan (beats map hashing and
-	// allocates nothing); large groups use a reusable counting map whose
-	// bucket storage is cleared and reused across states, amortising cost
-	// at O(group_size) without the O(group²) blowup that linear scan would
-	// suffer on pathological fan-out states like begin.
-	const linearThreshold = 16
-	var countBuf map[T]uint32
-	for s := range numStates {
-		offset := uint32(len(cc.Choices))
-		groupStart := len(cc.Choices)
-
-		groupSize := 0
-		for i := head[s]; i != -1; i = next[i] {
-			groupSize++
-		}
-
-		if groupSize <= linearThreshold {
-			for i := head[s]; i != -1; i = next[i] {
-				tok := pendingTok[i]
-				found := false
-				for m := groupStart; m < len(cc.Choices); m++ {
-					if cc.Choices[m] == tok {
-						cc.CumDist[m]++
-						found = true
-						break
-					}
-				}
-				if !found {
-					cc.Choices = append(cc.Choices, tok)
-					cc.CumDist = append(cc.CumDist, 1)
-				}
-			}
-		} else {
-			if countBuf == nil {
-				countBuf = make(map[T]uint32, groupSize)
-			} else {
-				clear(countBuf)
-			}
-			for i := head[s]; i != -1; i = next[i] {
-				countBuf[pendingTok[i]]++
-			}
-			for tok, cnt := range countBuf {
-				cc.Choices = append(cc.Choices, tok)
-				cc.CumDist = append(cc.CumDist, cnt)
-			}
-		}
-
-		// Convert raw counts to cumulative distribution.
-		var total uint32
-		for m := groupStart; m < len(cc.Choices); m++ {
-			total += cc.CumDist[m]
-			cc.CumDist[m] = total
-		}
-		cc.Model[stateKeys[s]] = ChoicesIndex{
-			Offset: offset,
-			Count:  uint32(len(cc.Choices) - groupStart),
-			Obs:    total,
+	var dedupe followDeduper[T]
+	for s, key := range keys {
+		start := len(cc.Choices)
+		dedupe.appendFollows(cc, follows, groups, s)
+		cc.Model[key] = ChoicesIndex{
+			Offset: uint32(start),
+			Count:  uint32(len(cc.Choices) - start),
+			Obs:    accumulate(cc.CumDist[start:]),
 		}
 	}
 	return cc
+}
+
+// observe streams every transition in corpus, returning the distinct state
+// keys and, per transition, the dense index of its state and its follower
+func (c *Chain[T]) observe(corpus [][]T) (keys []string, states []uint32, follows []T) {
+	beginSeq := c.beginWindow()
+	maxLen, totalObs := corpusShape(corpus)
+
+	// Fanout is barely above 1 on prose, so nearly every transition is a new state
+	estUnique := totalObs + 64
+	stateIdx := make(map[string]uint32, estUnique)
+	keys = make([]string, 0, estUnique)
+	states = make([]uint32, 0, totalObs)
+	follows = make([]T, 0, totalObs)
+	items := make([]T, 0, c.stateSize+maxLen+1)
+	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
+
+	for _, run := range corpus {
+		items = c.padRun(items, beginSeq, run)
+		for i := 0; i < len(run)+1; i++ {
+			probeKey := ks.probe(items[i : i+c.stateSize])
+			idx, ok := stateIdx[probeKey]
+			if !ok {
+				idx = uint32(len(keys))
+				stableKey := ks.intern(probeKey)
+				stateIdx[stableKey] = idx
+				keys = append(keys, stableKey)
+			}
+			states = append(states, idx)
+			follows = append(follows, items[i+c.stateSize])
+		}
+	}
+	return keys, states, follows
+}
+
+// stateGroups links each state's transitions into a list without sorting a
+// copy: head[s] is the latest transition out of state s, or -1, and next[i]
+// is the one before i out of the same state
+type stateGroups struct {
+	head, next []int32
+}
+
+func groupByState(states []uint32, numStates int) stateGroups {
+	g := stateGroups{head: make([]int32, numStates), next: make([]int32, len(states))}
+	for s := range g.head {
+		g.head[s] = -1
+	}
+	for i, s := range states {
+		g.next[i] = g.head[s]
+		g.head[s] = int32(i)
+	}
+	return g
+}
+
+func (g stateGroups) size(s int) int {
+	n := 0
+	for i := g.head[s]; i != -1; i = g.next[i] {
+		n++
+	}
+	return n
+}
+
+// Linear scans beat hashing for groups this small and allocate nothing
+const linearDedupeMax = 16
+
+// followDeduper appends one state's distinct followers to a chain with their
+// raw counts. Wide states like begin share one counting map so they stay
+// linear in group size instead of quadratic.
+type followDeduper[T comparable] struct {
+	counts map[T]uint32
+}
+
+func (d *followDeduper[T]) appendFollows(cc *CompressedChain[T], follows []T, g stateGroups, s int) {
+	size := g.size(s)
+	if size <= linearDedupeMax {
+		start := len(cc.Choices)
+		for i := g.head[s]; i != -1; i = g.next[i] {
+			tok := follows[i]
+			if m := slices.Index(cc.Choices[start:], tok); m >= 0 {
+				cc.CumDist[start+m]++
+				continue
+			}
+			cc.Choices = append(cc.Choices, tok)
+			cc.CumDist = append(cc.CumDist, 1)
+		}
+		return
+	}
+
+	if d.counts == nil {
+		d.counts = make(map[T]uint32, size)
+	} else {
+		clear(d.counts)
+	}
+	for i := g.head[s]; i != -1; i = g.next[i] {
+		d.counts[follows[i]]++
+	}
+	for tok, n := range d.counts {
+		cc.Choices = append(cc.Choices, tok)
+		cc.CumDist = append(cc.CumDist, n)
+	}
+}
+
+// accumulate turns counts into a cumulative distribution in place and
+// returns their total
+func accumulate(counts []uint32) uint32 {
+	var total uint32
+	for i, n := range counts {
+		total += n
+		counts[i] = total
+	}
+	return total
 }
 
 // Implements GenerativeChain[T].

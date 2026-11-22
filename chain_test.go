@@ -151,6 +151,16 @@ func (intEncoder) Decode(state string) []int {
 // BuildRaw().Compress() pipeline. Order within a state group is
 // unspecified, so Choices/CumDist are compared as multisets of
 // (token, count) pairs derived from the cumulative deltas.
+// wideBeginCorpus repeats 20 first words so the begin state has more
+// observations than a linear scan dedupes, with repeated followers
+func wideBeginCorpus() [][]string {
+	var corpus [][]string
+	for i := range 60 {
+		corpus = append(corpus, []string{fmt.Sprintf("w%d", i%20), "end"})
+	}
+	return corpus
+}
+
 func TestBuildCompressedEquivalence(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -177,6 +187,7 @@ func TestBuildCompressedEquivalence(t *testing.T) {
 			{"a", "b"},
 			{"the", "cat", "ran", "away"},
 		}},
+		{"wide_begin", wideBeginCorpus()},
 	}
 
 	for _, tc := range cases {

@@ -69,11 +69,7 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
 
 	for _, run := range corpus {
-		items = items[:0]
-		items = append(items, beginSeq...)
-		items = append(items, run...)
-		items = append(items, c.sentinels.End)
-
+		items = c.padRun(items, beginSeq, run)
 		for i := 0; i < len(run)+1; i++ {
 			probeKey := ks.probe(items[i : i+c.stateSize])
 			follow := items[i+c.stateSize]
@@ -108,6 +104,13 @@ func corpusShape[T any](corpus [][]T) (maxLen, totalObs int) {
 		totalObs += len(run) + 1
 	}
 	return maxLen, totalObs
+}
+
+// padRun reuses dst to frame run between a begin window and End
+func (c *Chain[T]) padRun(dst, begin, run []T) []T {
+	dst = append(dst[:0], begin...)
+	dst = append(dst, run...)
+	return append(dst, c.sentinels.End)
 }
 
 func (c *Chain[T]) precomputeBeginState() {
