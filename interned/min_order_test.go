@@ -53,7 +53,7 @@ func TestMinimumOrderPreservesPaddedBeginningsAndStateInspection(t *testing.T) {
 		t.Fatalf("padded initial context failed: %v %v", out, err)
 	}
 	states := 0
-	for range chain.(BackoffChain).States(1) {
+	for range chain.States(1) {
 		states++
 	}
 	if states == 0 {

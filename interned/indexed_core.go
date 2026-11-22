@@ -31,9 +31,8 @@ func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
 	if idx.Count == 1 {
 		return TokenID(idx.Offset)
 	}
-	cumDist := c.CumDist[idx.Offset : idx.Offset+idx.Count]
-	choices := c.Choices[idx.Offset : idx.Offset+idx.Count]
-	return choices[scanCumDist(cumDist, c.uint32n(cumDist[len(cumDist)-1]))]
+	choices, cumDist := c.slices(idx)
+	return choices[c.draw(cumDist)]
 }
 
 func (c *indexedCore[K]) MoveKey(key K) (TokenID, error) {

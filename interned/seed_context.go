@@ -87,20 +87,3 @@ func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 	i := lo + sort.Search(hi-lo, func(i int) bool { return x.cumulative[lo+i+1] > target })
 	return append([]TokenID(nil), x.row(i)[:x.order-len(seed)]...), nil
 }
-
-// WithoutVerbatim shares immutable tables and context indexes with the original
-// chain while disabling only copy steering. Neither chain's policy is mutated.
-func (b *backoffCore) WithoutVerbatim() BackoffChain {
-	cfg := b.cfg
-	cfg.MaxVerbatim = -1
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: cfg, sentinels: b.sentinels, encoder: b.encoder, random: b.random, contexts: b.contexts, escape: b.escape})
-}
-
-// WithEscape shares immutable tables with the original chain while
-// interpolating across context orders; see backoffCore.escape.
-func (b *backoffCore) WithEscape(scale float64) BackoffChain {
-	if scale < 0 {
-		scale = 0
-	}
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: b.cfg, sentinels: b.sentinels, encoder: b.encoder, random: b.random, contexts: b.contexts, escape: scale})
-}
