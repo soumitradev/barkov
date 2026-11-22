@@ -2,6 +2,7 @@ package nhash_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -127,5 +128,110 @@ func TestHashNGramSetValidatorClosureEquivalence(t *testing.T) {
 		if fast(p) != slow(p) {
 			t.Errorf("verdict mismatch on %v: fast=%v slow=%v", p, fast(p), slow(p))
 		}
+		if fastSet.Contains(p) != slowSet.Contains(p) {
+			t.Errorf("Contains mismatch on %v: fast=%v slow=%v", p, fastSet.Contains(p), slowSet.Contains(p))
+		}
 	}
+}
+
+func TestHashNGramSetLargeAndEmptyGrams(t *testing.T) {
+	mid := strings.Repeat("a", 150)
+	huge := strings.Repeat("b", 2000)
+	corpus := [][]string{
+		{"short", "hit", "gram"},
+		{mid, mid, mid},
+		{huge, huge, huge},
+	}
+
+	fast := nhash.New(corpus, 3, barkov.DefaultStringEncoder, fnv.FNV{})
+	slow := nhash.New(corpus, 3, plainSepEncoder{sep: barkov.SEP}, fnv.FNV{})
+
+	probes := [][]string{
+		{"short", "hit", "gram"},
+		{mid, mid, mid},
+		{huge, huge, huge},
+		{"short", "hit", "gram"},
+		{huge, huge, "miss"},
+		{},
+		nil,
+	}
+	for _, p := range probes {
+		if fast.Contains(p) != slow.Contains(p) {
+			t.Errorf("Contains mismatch on len=%d: fast=%v slow=%v", len(p), fast.Contains(p), slow.Contains(p))
+		}
+		if fast.Validate(p) != !fast.Contains(p) {
+			t.Errorf("Validate did not invert Contains on len=%d", len(p))
+		}
+	}
+}
+
+func TestHashNGramSetValidateConcurrent(t *testing.T) {
+	longTok := strings.Repeat("x", 150)
+	corpus := [][]string{
+		{"the", "quick", "brown", "fox"},
+		{longTok, longTok, longTok},
+	}
+	s := nhash.New(corpus, 3, barkov.DefaultStringEncoder, fnv.FNV{})
+	v := s.Validator()
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				if s.Validate([]string{"the", "quick", "brown"}) {
+					t.Errorf("accepted corpus hit")
+					return
+				}
+				if !v([]string{"never", "seen", "gram"}) {
+					t.Errorf("rejected unseen gram")
+					return
+				}
+				if !s.Contains([]string{longTok, longTok, longTok}) {
+					t.Errorf("missed oversized corpus hit")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func BenchmarkHashNGramSetValidate(b *testing.B) {
+	corpus := [][]string{
+		{"the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"},
+		{"a", "quick", "brown", "fox", "is", "faster", "than", "a", "lazy", "dog"},
+	}
+	hit := []string{"the", "quick", "brown"}
+	miss := []string{"never", "in", "corpus"}
+
+	b.Run("AppendEncoder", func(b *testing.B) {
+		s := nhash.New(corpus, 3, barkov.DefaultStringEncoder, fnv.FNV{})
+		b.ResetTimer()
+		for b.Loop() {
+			_ = s.Validate(hit)
+			_ = s.Validate(miss)
+		}
+	})
+
+	b.Run("AppendEncoderParallel", func(b *testing.B) {
+		s := nhash.New(corpus, 3, barkov.DefaultStringEncoder, fnv.FNV{})
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				_ = s.Validate(hit)
+				_ = s.Validate(miss)
+			}
+		})
+	})
+
+	b.Run("Fallback", func(b *testing.B) {
+		s := nhash.New(corpus, 3, plainSepEncoder{sep: barkov.SEP}, fnv.FNV{})
+		b.ResetTimer()
+		for b.Loop() {
+			_ = s.Validate(hit)
+			_ = s.Validate(miss)
+		}
+	})
 }

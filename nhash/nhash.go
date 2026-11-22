@@ -1,30 +1,34 @@
-// Package nhash provides a hash-keyed anti-verbatim validator.
-// It uses about 50% less memory than barkov.NGramSet by storing uint64
-// hashes instead of full string keys. The Hasher is pluggable: pass
-// hashers/xxh3.XXH3{} for best performance or hashers/fnv.FNV{} for
-// zero extra dependencies.
+// Package nhash provides a hash-keyed anti-verbatim validator that stores
+// uint64 hashes instead of full n-gram strings.
 package nhash
 
 import (
+	"sync"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
 	"github.com/soumitradev/barkov/v2/hashers"
 )
 
-// HashNGramSet is a hash-keyed anti-verbatim validator. Has a per-entry
-// false-positive rate of ~1 in 2^64 for high-quality hashers.
-type HashNGramSet[T comparable] struct {
-	hashes  map[uint64]struct{}
-	n       int
-	hasher  hashers.Hasher
-	encoder barkov.StateEncoder[T]
+const maxPooledScratch = 4096
+
+var scratchPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 256)
+		return &b
+	},
 }
 
-// New builds a HashNGramSet from a corpus. n is the n-gram width; encoder
-// converts token slices to byte strings; hasher hashes those byte strings.
-// When the encoder implements barkov.AppendEncoder[T] the build hashes
-// directly from a reusable scratch buffer, avoiding any string allocation.
+// HashNGramSet is a hash-keyed anti-verbatim validator.
+type HashNGramSet[T comparable] struct {
+	hashes    map[uint64]struct{}
+	n         int
+	hasher    hashers.Hasher
+	encoder   barkov.StateEncoder[T]
+	appendEnc barkov.AppendEncoder[T]
+}
+
+// New builds a HashNGramSet of n-grams of width n from corpus.
 func New[T comparable](
 	corpus [][]T,
 	n int,
@@ -38,78 +42,62 @@ func New[T comparable](
 		}
 	}
 	set := make(map[uint64]struct{}, total/2+16)
+	appendEnc, _ := any(encoder).(barkov.AppendEncoder[T])
 
-	if appendEnc, ok := any(encoder).(barkov.AppendEncoder[T]); ok {
-		scratch := make([]byte, 0, 256)
-		for _, tokens := range corpus {
-			for i := 0; i <= len(tokens)-n; i++ {
-				scratch = scratch[:0]
-				scratch = appendEnc.AppendEncoded(scratch, tokens[i:i+n])
-				set[hasher.Hash(scratch)] = struct{}{}
+	var scratch []byte
+	if appendEnc != nil {
+		scratch = make([]byte, 0, 256)
+	}
+	for _, tokens := range corpus {
+		for i := 0; i <= len(tokens)-n; i++ {
+			gram := tokens[i : i+n]
+			var h uint64
+			if appendEnc != nil {
+				scratch = appendEnc.AppendEncoded(scratch[:0], gram)
+				h = hasher.Hash(scratch)
+			} else {
+				h = hashString(hasher, encoder.Encode(gram))
 			}
-		}
-	} else {
-		for _, tokens := range corpus {
-			for i := 0; i <= len(tokens)-n; i++ {
-				key := encoder.Encode(tokens[i : i+n])
-				set[hashString(hasher, key)] = struct{}{}
-			}
+			set[h] = struct{}{}
 		}
 	}
-	return &HashNGramSet[T]{hashes: set, n: n, hasher: hasher, encoder: encoder}
+	return &HashNGramSet[T]{
+		hashes:    set,
+		n:         n,
+		hasher:    hasher,
+		encoder:   encoder,
+		appendEnc: appendEnc,
+	}
 }
 
 // Contains reports whether gram is in the set.
 func (s *HashNGramSet[T]) Contains(gram []T) bool {
-	key := s.encoder.Encode(gram)
-	_, ok := s.hashes[hashString(s.hasher, key)]
+	var h uint64
+	if s.appendEnc != nil {
+		bp := scratchPool.Get().(*[]byte)
+		buf := s.appendEnc.AppendEncoded(*bp, gram)
+		h = s.hasher.Hash(buf)
+		if cap(buf) <= maxPooledScratch {
+			*bp = buf[:0]
+			scratchPool.Put(bp)
+		}
+	} else {
+		h = hashString(s.hasher, s.encoder.Encode(gram))
+	}
+	_, ok := s.hashes[h]
 	return ok
 }
 
-// Validator returns a function suitable for WithValidator that rejects any
-// gram present in the set. When the encoder implements AppendEncoder[T],
-// the returned closure is specialised to skip the per-call type assertion
-// and avoid allocating a string per gram.
-func (s *HashNGramSet[T]) Validator() func([]T) bool {
-	hashes := s.hashes
-	hasher := s.hasher
-	if appendEnc, ok := any(s.encoder).(barkov.AppendEncoder[T]); ok {
-		return func(gram []T) bool {
-			var buf [256]byte
-			scratch := appendEnc.AppendEncoded(buf[:0], gram)
-			_, found := hashes[hasher.Hash(scratch)]
-			return !found
-		}
-	}
-	encoder := s.encoder
-	return func(gram []T) bool {
-		key := encoder.Encode(gram)
-		_, found := hashes[hashString(hasher, key)]
-		return !found
-	}
-}
+// Validate implements barkov.WindowValidator[T], rejecting corpus n-grams.
+func (s *HashNGramSet[T]) Validate(gram []T) bool { return !s.Contains(gram) }
 
-// Size returns the number of unique n-grams in the set.
+// Validator returns a WithValidator callback that rejects corpus n-grams.
+func (s *HashNGramSet[T]) Validator() func([]T) bool { return s.Validate }
+
+// Size returns the number of unique hashes in the set.
 func (s *HashNGramSet[T]) Size() int { return len(s.hashes) }
 
-// Validate implements barkov.WindowValidator[T]. Same accept-semantics as
-// the Validator() closure: true means gram is NOT a verbatim corpus
-// n-gram. Mirrors Validator()'s allocation-free append-encoder fast path
-// rather than allocating a fresh closure on every call.
-func (s *HashNGramSet[T]) Validate(gram []T) bool {
-	if appendEnc, ok := any(s.encoder).(barkov.AppendEncoder[T]); ok {
-		var buf [256]byte
-		scratch := appendEnc.AppendEncoded(buf[:0], gram)
-		_, found := s.hashes[s.hasher.Hash(scratch)]
-		return !found
-	}
-	key := s.encoder.Encode(gram)
-	_, found := s.hashes[hashString(s.hasher, key)]
-	return !found
-}
-
-// N implements barkov.WindowValidator[T], returning the n-gram width
-// this set was built with.
+// N implements barkov.WindowValidator[T], returning the n-gram width.
 func (s *HashNGramSet[T]) N() int { return s.n }
 
 var _ barkov.WindowValidator[string] = (*HashNGramSet[string])(nil)
