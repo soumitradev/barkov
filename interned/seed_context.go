@@ -2,19 +2,17 @@ package interned
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"sort"
 
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// contextIndex stores minimum-order states sorted from their last token back.
-// Every suffix is one contiguous range. Cumulative observation counts allow
-// weighted sampling without scanning the corpus or weakening MinSupport.
+// contextIndex holds the MinOrder states sorted by their tokens read from
+// last to first, so every suffix is one contiguous range
 type contextIndex struct {
 	order      int
-	rows       []TokenID // each row contains order tokens followed by its observation count
-	cumulative []uint64
+	rows       []TokenID // each row is order tokens then its observation count
+	cumulative []uint64  // observations of supported rows, for weighted draws
 }
 
 func newContextIndex(table orderTable, order, minSupport int) *contextIndex {
@@ -66,10 +64,9 @@ func (x *contextIndex) compare(i int, suffix []TokenID) int {
 	return 0
 }
 
-// SeedContext samples observed tokens preceding a short interior seed. The
-// returned history completes MinOrder; it is not part of the emitted seed.
-// Seeds already at least MinOrder long need no extra history. Callers must
-// still pass the seed and sampled history through the normal generation walk.
+// SeedContext samples observed tokens preceding a seed shorter than MinOrder,
+// completing a MinOrder context. The history is not part of the emitted seed,
+// and callers still pass both through the normal generation walk.
 func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 	if len(seed) == 0 || len(seed) >= b.cfg.MinOrder {
 		return nil, nil
@@ -84,30 +81,7 @@ func (b *backoffCore) SeedContext(seed []TokenID) ([]TokenID, error) {
 	if total == 0 {
 		return nil, fmt.Errorf("barkov: seed contexts have insufficient support: %w", barkov.ErrInsufficientSupport)
 	}
-	var draw uint64
-	if b.rng != nil {
-		draw = b.rng.Uint64N(total)
-	} else {
-		draw = rand.Uint64N(total)
-	}
-	target := x.cumulative[lo] + draw
+	target := x.cumulative[lo] + b.uint64n(total)
 	i := lo + sort.Search(hi-lo, func(i int) bool { return x.cumulative[lo+i+1] > target })
 	return append([]TokenID(nil), x.row(i)[:x.order-len(seed)]...), nil
-}
-
-// WithoutVerbatim shares immutable tables and context indexes with the original
-// chain while disabling only copy steering. Neither chain's policy is mutated.
-func (b *backoffCore) WithoutVerbatim() BackoffChain {
-	cfg := b.cfg
-	cfg.MaxVerbatim = -1
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts, escape: b.escape})
-}
-
-// WithEscape shares immutable tables with the original chain while
-// interpolating across context orders; see backoffCore.escape.
-func (b *backoffCore) WithEscape(scale float64) BackoffChain {
-	if scale < 0 {
-		scale = 0
-	}
-	return wrapBackoff(&backoffCore{tables: b.tables, cfg: b.cfg, sentinels: b.sentinels, encoder: b.encoder, rng: b.rng, contexts: b.contexts, escape: scale})
 }

@@ -46,7 +46,7 @@ func TestBackoffSelection(t *testing.T) {
 
 	draw := func(minSupport int) map[TokenID]int {
 		chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinSupport: minSupport, MaxVerbatim: -1}, encoded)
-		chain.(barkov.RNGSettable).SetRNG(rand.New(rand.NewPCG(7, 7)))
+		chain.SetRNG(rand.New(rand.NewPCG(7, 7)))
 		core := chain.(*backoffChain3)
 		counts := make(map[TokenID]int)
 		for range 200 {
@@ -251,7 +251,7 @@ func TestSteeringOracle(t *testing.T) {
 
 	const window = 6
 	chain := BuildBackoff(BackoffConfig{MaxOrder: 6, MaxVerbatim: window}, encoded)
-	chain.(barkov.RNGSettable).SetRNG(rand.New(rand.NewPCG(0xb4, 0xc0)))
+	chain.SetRNG(rand.New(rand.NewPCG(0xb4, 0xc0)))
 	oracle := barkov.NewNGramSet(encoded, window, PackedEncoder{})
 
 	ctx := context.Background()
@@ -296,8 +296,8 @@ func loadPublicCorpusInterned(t *testing.T) [][]string {
 	return corpus
 }
 
-// TestBackoffConfigValidation pins the panic contract on invalid configs
-// and the zero-value defaults.
+// TestBackoffConfigValidation pins the zero-value defaults and rejection of
+// out-of-range configs.
 func TestBackoffConfigValidation(t *testing.T) {
 	valid := BackoffConfig{}.withDefaults()
 	if valid.MaxOrder != 6 || valid.MinSupport != 1 || valid.MaxVerbatim != 6 {
@@ -313,14 +313,9 @@ func TestBackoffConfigValidation(t *testing.T) {
 		{MaxVerbatim: 7}, // > default MaxOrder 6
 		{MaxVerbatim: -2},
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("config %+v should panic", bad)
-				}
-			}()
-			bad.withDefaults()
-		}()
+		if bad.withDefaults().validate() == nil {
+			t.Errorf("config %+v should be rejected", bad)
+		}
 	}
 }
 
@@ -330,7 +325,7 @@ func TestBackoffStatesIteration(t *testing.T) {
 		{"the", "quick", "brown", "fox"},
 		{"the", "lazy", "dog"},
 	})
-	chain := BuildBackoff(BackoffConfig{MaxOrder: 3}, corpus).(BackoffChain)
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3}, corpus)
 
 	// Order 1 states
 	order1States := make(map[TokenID]uint32)

@@ -24,7 +24,7 @@ func (c *indexedCore[K]) snapshotStateCount() int { return c.Model.Len() }
 // verifies every state occurs once; cumulative weights need only a linear pass.
 func readContextSnapshot(d *snapshotDecoder, table orderTable, cfg BackoffConfig) *contextIndex {
 	n := d.u32()
-	if int(n) != table.(interface{ snapshotStateCount() int }).snapshotStateCount() {
+	if int(n) != table.snapshotStateCount() {
 		d.fail("seed context count differs from state table")
 	}
 	width := cfg.MinOrder + 1

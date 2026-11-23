@@ -29,7 +29,7 @@ func (g *Generator) Save(w io.Writer) error {
 	binary.LittleEndian.PutUint32(header[16:20], uint32(g.defaults.maxTokens))
 	binary.LittleEndian.PutUint32(header[20:24], uint32(g.defaults.retries))
 	binary.LittleEndian.PutUint32(header[24:28], uint32(g.defaults.threads))
-	binary.LittleEndian.PutUint32(header[28:32], uint32(g.minOrder))
+	binary.LittleEndian.PutUint32(header[28:32], uint32(g.minOrder()))
 	binary.LittleEndian.PutUint32(header[32:], crc32.ChecksumIEEE(header[:32]))
 	if n, err := w.Write(header[:]); err != nil {
 		return err
@@ -68,7 +68,7 @@ func Load(r io.Reader) (*Generator, error) {
 	if minOrder != s.Config().MinOrder {
 		return nil, fmt.Errorf("%w: text and chain minimum orders disagree", interned.ErrInvalidSnapshot)
 	}
-	return &Generator{chain: s.Forward, reverseChain: s.Reverse, vocab: s.Vocabulary, messages: s.Messages, defaults: defaults, minOrder: minOrder, unknownContext: interned.TokenID(s.Vocabulary.Size())}, nil
+	return &Generator{chain: s.Forward, reverseChain: s.Reverse, vocab: s.Vocabulary, messages: s.Messages, defaults: defaults, unknownContext: interned.TokenID(s.Vocabulary.Size())}, nil
 }
 
 // Compact shrinks a freshly trained generator's tables to what loading its

@@ -53,7 +53,7 @@ func TestEscapeSamplesTheSteeredMixtureExactly(t *testing.T) {
 	// END×1 and y×3. Steering forbids x, which completes a corpus 3-gram.
 	v := NewVocabulary()
 	encoded := v.InternCorpus(repeatCorpus("q a b x", 9, "q a b", 1, "z b y", 3))
-	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).(BackoffChain).WithEscape(1)
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).WithEscape(1)
 	e := 2.0 / 12 // T/(N+T) at orders 3 and 2
 	a3, a2, a1 := 1-e, e*(1-e), e*e
 	end, y := a3*0.1+a2*0.1+a1/13, a1*3/13
@@ -67,7 +67,7 @@ func TestEscapeSamplesTheSteeredMixtureExactly(t *testing.T) {
 func TestEscapeFailsWhenNoContinuationIsAllowed(t *testing.T) {
 	v := NewVocabulary()
 	encoded := v.InternCorpus(repeatCorpus("q a b x", 2))
-	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).(BackoffChain).WithEscape(1)
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).WithEscape(1)
 	ids := []TokenID{mustLookup(t, v, "q"), mustLookup(t, v, "a"), mustLookup(t, v, "b")}
 	if _, err := chain.Move(chain.Encoder().Encode(ids)); !errors.Is(err, barkov.ErrSentenceFailedValidation) {
 		t.Fatalf("every continuation forbidden: %v, want ErrSentenceFailedValidation", err)
@@ -81,7 +81,7 @@ func TestEscapeCountsStartPaddingOnce(t *testing.T) {
 	// the start context would halve that again.
 	v := NewVocabulary()
 	encoded := v.InternCorpus(repeatCorpus("a b", 1, "c a d", 1))
-	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: -1}, encoded).(BackoffChain).WithEscape(1)
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: -1}, encoded).WithEscape(1)
 	got := drawNext(t, chain, v, []string{"^", "^", "a"}, 100000)
 	if math.Abs(got["d"]-0.25) > 0.01 {
 		t.Fatalf("P(d) after a message-start a = %.3f, want 0.25", got["d"])
@@ -91,7 +91,7 @@ func TestEscapeCountsStartPaddingOnce(t *testing.T) {
 func TestEscapeViewKeepsLongestContextByDefault(t *testing.T) {
 	v := NewVocabulary()
 	encoded := v.InternCorpus(repeatCorpus("a b", 1, "c a d", 1))
-	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: -1}, encoded).(BackoffChain)
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: -1}, encoded)
 	if got := drawNext(t, chain.WithEscape(0), v, []string{"^", "^", "a"}, 2000); got["b"] < 0.9999 {
 		t.Fatalf("escape 0 should always use the start context: %v", got)
 	}
@@ -103,7 +103,7 @@ func TestEscapeFindsARareButAllowedContinuation(t *testing.T) {
 	// must still return y rather than give up.
 	v := NewVocabulary()
 	encoded := v.InternCorpus(repeatCorpus("q a b x", 1000, "z b y", 1))
-	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).(BackoffChain).WithEscape(1)
+	chain := BuildBackoff(BackoffConfig{MaxOrder: 3, MinOrder: 1, MaxVerbatim: 3}, encoded).WithEscape(1)
 	if got := drawNext(t, chain, v, []string{"q", "a", "b"}, 200); got["y"] < 0.9999 {
 		t.Fatalf("rare allowed continuation: %v, want always y", got)
 	}

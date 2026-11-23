@@ -3,126 +3,63 @@ package interned
 import (
 	"fmt"
 	"iter"
-	"math/rand/v2"
-	"sort"
-	"sync"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// BackoffConfig configures BuildBackoff. The zero value gives defaults.
-type BackoffConfig struct {
-	// MaxOrder is the longest context tried, 2..8. Default 6.
-	MaxOrder int
-	// MinOrder is the shortest context allowed during generation, 1..MaxOrder.
-	// Default 1. Lower-order tables remain available for verbatim checks.
-	MinOrder int
-	// MinSupport is the minimum observation count (ChoicesIndex.Obs) a
-	// context needs to be used, independently of its order. Default 1.
-	// Range 1..65535; no order is exempt.
-	MinSupport int
-	// MaxVerbatim is the longest run of consecutive emitted tokens
-	// allowed to reproduce a corpus n-gram verbatim. Steering filters
-	// candidates that would extend a run to this length. 0 = default
-	// (MaxOrder); -1 = disabled; else 2..MaxOrder.
-	MaxVerbatim int
-}
-
-// BackoffChain is a backoff engine chain that supports state iteration
-// across its orders and RNG configuration.
+// BackoffChain is the variable-order chain BuildBackoff returns.
 type BackoffChain interface {
 	barkov.GenerativeChain[TokenID]
 	barkov.RNGSettable
-	// States iterates all states at order (1..MaxOrder) with their total
-	// transition observation counts.
+	// States iterates the states at order 1..MaxOrder with their observation counts.
 	States(order int) iter.Seq2[[]TokenID, uint32]
 	// SeedContext samples observed history for a short interior seed.
 	SeedContext(seed []TokenID) ([]TokenID, error)
-	// WithoutVerbatim returns a view sharing the same immutable model tables.
+	// WithoutVerbatim returns a view of the same tables with copy steering off.
 	WithoutVerbatim() BackoffChain
-	// CopiesRun reports whether tokens contain a corpus n-gram as long as
-	// the copy-steering window, i.e. a run that steering would have
-	// prevented inside one walk. False when steering is disabled.
+	// CopiesRun reports whether tokens contain a corpus run that copy steering
+	// would have prevented inside one walk. False when steering is disabled.
 	CopiesRun(tokens []TokenID) bool
-	// IsFragment reports whether tokens occur contiguously inside one
-	// corpus message. Exact for up to MaxOrder tokens; longer runs are
-	// what copy steering prevents.
+	// IsFragment reports whether tokens occur contiguously inside one corpus
+	// message. Only runs of up to MaxOrder tokens can match.
 	IsFragment(tokens []TokenID) bool
-	// WithEscape returns a view sharing the same tables whose walk
-	// interpolates across context orders instead of always using the
-	// longest one (see backoffCore.escape). scale 0 restores the default.
+	// WithEscape returns a view of the same tables whose walk interpolates
+	// across context orders. scale 0 restores the longest-context walk.
 	WithEscape(scale float64) BackoffChain
-	// Options explains one step of the walk after window; see
-	// backoffCore.Options.
+	// Options explains one step of the walk after window.
 	Options(window []TokenID) ([]OrderOptions, int)
 }
 
-// withDefaults validates cfg and fills zero values with defaults. Panics
-// on out-of-range values, matching the Build convention.
-func (cfg BackoffConfig) withDefaults() BackoffConfig {
-	if cfg.MaxOrder == 0 {
-		cfg.MaxOrder = 6
-	}
-	if cfg.MaxOrder < 2 || cfg.MaxOrder > 8 {
-		panic(fmt.Sprintf("interned: BuildBackoff: MaxOrder %d outside supported range 2..8", cfg.MaxOrder))
-	}
-	if cfg.MinOrder == 0 {
-		cfg.MinOrder = 1
-	}
-	if cfg.MinOrder < 1 || cfg.MinOrder > cfg.MaxOrder {
-		panic(fmt.Sprintf("interned: BuildBackoff: MinOrder %d outside supported range 1..%d", cfg.MinOrder, cfg.MaxOrder))
-	}
-	if cfg.MinSupport == 0 {
-		cfg.MinSupport = 1
-	}
-	if cfg.MinSupport < 1 || cfg.MinSupport > 65535 {
-		panic(fmt.Sprintf("interned: BuildBackoff: MinSupport %d outside supported range 1..65535", cfg.MinSupport))
-	}
-	if cfg.MaxVerbatim == 0 {
-		cfg.MaxVerbatim = cfg.MaxOrder
-	}
-	if cfg.MaxVerbatim != -1 && (cfg.MaxVerbatim < 2 || cfg.MaxVerbatim > cfg.MaxOrder) {
-		panic(fmt.Sprintf("interned: BuildBackoff: MaxVerbatim %d must be -1 (disabled) or in 2..MaxOrder (%d)", cfg.MaxVerbatim, cfg.MaxOrder))
-	}
-	return cfg
-}
-
-// orderTable is the view backoffCore needs of one per-order indexedCore.
+// orderTable is one per-order indexedCore, whatever its key size
 type orderTable interface {
-	// lookupTail probes the table with the last len(tail) tokens of the
-	// window. Caller guarantees len(tail) == the table's stateSize; the
-	// implementation reinterprets tail's backing memory as K, same idiom
-	// as indexedCore.MoveKey.
+	// lookupTail needs exactly the table's stateSize tokens
 	lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool)
-	// slices resolves a Count>1 index to its choices/cumdist views.
+	// slices resolves a Count>1 index to its followers and cumulative weights
 	slices(idx barkov.ChoicesIndex) (choices []TokenID, cum []uint32)
-	// states iterates all states in the table with their total observation counts.
 	states() iter.Seq2[[]TokenID, uint32]
+	compact()
+	writeTable(e *snapshotEncoder)
+	snapshotStateCount() int
 }
 
-// lookupTail implements orderTable. tail's backing array has at least
-// stateSize tokens, so reading sizeof(K) bytes from &tail[0] produces the
-// intended [stateSize]TokenID key value.
 func (c *indexedCore[K]) lookupTail(tail []TokenID) (barkov.ChoicesIndex, bool) {
 	return c.Model.Get(*(*K)(unsafe.Pointer(&tail[0])))
 }
 
-// slices implements orderTable.
 func (c *indexedCore[K]) slices(idx barkov.ChoicesIndex) ([]TokenID, []uint32) {
-	return c.Choices[idx.Offset : idx.Offset+uint32(idx.Count)],
-		c.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+	return c.Choices[idx.Offset : idx.Offset+idx.Count],
+		c.CumDist[idx.Offset : idx.Offset+idx.Count]
 }
 
-// states implements orderTable.
 func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 	return func(yield func([]TokenID, uint32) bool) {
 		for k, idx := range c.Model.All() {
 			var total uint32
 			if idx.Count == 1 {
-				total = uint32(idx.Obs)
+				total = idx.Obs
 			} else {
-				total = c.CumDist[idx.Offset+uint32(idx.Count)-1]
+				total = c.CumDist[idx.Offset+idx.Count-1]
 			}
 			tokens := make([]TokenID, c.stateSize)
 			copy(tokens, unsafe.Slice((*TokenID)(unsafe.Pointer(&k)), c.stateSize))
@@ -133,35 +70,19 @@ func (c *indexedCore[K]) states() iter.Seq2[[]TokenID, uint32] {
 	}
 }
 
-// backoffCore does the variable-order walk over a stack of per-order
-// indexed tables. At each step it tries the longest context first and
-// backs off to shorter ones until it finds a state with enough corpus
-// support (MinSupport), down to MinOrder. The walk
-// is stateless (a pure function of the state window plus RNG), so a
-// built chain is safe for concurrent readers, except under SetRNG.
+// backoffCore walks per-order tables from the longest context down to the
+// first with MinSupport observations. Concurrent readers are safe unless
+// SetRNG is used.
 type backoffCore struct {
+	random
 	tables    []orderTable // index m-1 = order m
 	cfg       BackoffConfig
 	sentinels barkov.Sentinels[TokenID]
 	encoder   PackedEncoder
-	rng       *rand.Rand
 	contexts  *contextIndex
-	// escape > 0 turns "longest context wins" into interpolated backoff:
-	// at each usable order above MinOrder the walk leaves for the next
-	// shorter context with probability escape·T/(N+T) (PPM method C),
-	// where T is the context's distinct followers and N its observations.
-	// Sampling the escape chain this way draws exactly from the mixture
-	// (1-ε)·ML(h) + ε·Q(suffix(h)), and every emitted transition is still
-	// observed at the order it came from.
-	escape float64
+	escape    float64 // 0 means the longest supported context always wins
 }
 
-// SetRNG overrides the random source used by the walk. Intended for
-// deterministic tests and benchmarks; not safe for concurrent use.
-func (b *backoffCore) SetRNG(r *rand.Rand) { b.rng = r }
-
-// States iterates all states at the given order (1..MaxOrder) with their
-// total observation count (total transitions observed from that state).
 func (b *backoffCore) States(order int) iter.Seq2[[]TokenID, uint32] {
 	if order < 1 || order > len(b.tables) {
 		return func(yield func([]TokenID, uint32) bool) {}
@@ -173,10 +94,6 @@ func (b *backoffCore) StateSize() int                        { return b.cfg.MaxO
 func (b *backoffCore) Sentinels() barkov.Sentinels[TokenID]  { return b.sentinels }
 func (b *backoffCore) Encoder() barkov.StateEncoder[TokenID] { return b.encoder }
 
-// Move satisfies barkov.GenerativeChain[TokenID]. Same reinterpret idiom
-// as indexedCore.Move: the packed-encoder byte layout matches TokenID's
-// in-memory layout, so the string bytes are viewed as a token window
-// without a decode loop.
 func (b *backoffCore) Move(state string) (TokenID, error) {
 	if len(state) != b.cfg.MaxOrder*4 {
 		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, barkov.ErrStateNotFound)
@@ -185,504 +102,65 @@ func (b *backoffCore) Move(state string) (TokenID, error) {
 	return b.moveTail(window)
 }
 
-// moveTail picks the next token for the given window (length MaxOrder):
-// longest supported context wins; orders with Obs below MinSupport are
-// skipped in favor of shorter contexts with more evidence. When steering
-// is active and every candidate at an order would extend a verbatim
-// corpus run, the walk falls through to the next shorter order, whose
-// candidate set is wider; if every order is exhausted the step fails
-// with ErrSentenceFailedValidation and the caller retries the sentence.
+// moveTail picks the next token after window. When steering vetoes every
+// candidate at an order, the next shorter order offers a wider set.
 func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
-	// One steering snapshot per step, shared by every candidate check at
-	// every order: all of them test membership in the same follower set.
 	var sv steerView
 	if b.cfg.MaxVerbatim > 0 && b.runLongEnough(window) {
 		sv = b.steerSnapshot(window)
 	}
-	// Steering-probe buffer for the steerBig fallback, shared across every
-	// candidate probe below. Declaring it inside wouldExtendVerbatim would
-	// heap-allocate per candidate: the buffer's address flows through the
-	// orderTable interface call, so escape analysis can't stack it, and
-	// order-1 contexts on common tokens have thousands of candidates.
+	// Shared by every candidate probe, since a buffer passed through the
+	// orderTable interface escapes to the heap
 	var probeBuf [8]TokenID
 	if b.escape > 0 {
 		return b.moveEscape(window, sv, &probeBuf)
 	}
-	sawState, sawSupported := false, false
+	failure := noContext
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
-		tail := window[len(window)-m:]
-		idx, ok := b.tables[m-1].lookupTail(tail)
+		idx, ok := b.tables[m-1].lookupTail(window[len(window)-m:])
 		if !ok {
 			continue
 		}
-		sawState = true
-		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
-			continue // thin evidence; a shorter order has more
+		failure = max(failure, thinContext)
+		if idx.Obs < uint32(b.cfg.MinSupport) {
+			continue
 		}
-		sawSupported = true
+		failure = allSteered
 		if tok, ok := b.sample(m, idx, window, sv, &probeBuf); ok {
 			return tok, nil
 		}
-		// All candidates at this order extend a verbatim run; back off.
 	}
-	var zero TokenID
-	if sawSupported {
-		return zero, fmt.Errorf("barkov: all continuations extend a verbatim run: %w",
-			barkov.ErrSentenceFailedValidation)
-	}
-	if sawState {
-		return zero, fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
+	return 0, b.noContinuationErr(failure)
+}
+
+// stepFailure is how far a step got before running out of continuations
+type stepFailure uint8
+
+const (
+	noContext   stepFailure = iota // no order has seen the window's context
+	thinContext                    // every seen context is below MinSupport
+	allSteered                     // steering vetoed every supported follower
+)
+
+func (b *backoffCore) noContinuationErr(failure stepFailure) error {
+	switch failure {
+	case allSteered:
+		return fmt.Errorf("barkov: all continuations extend a verbatim run: %w", barkov.ErrSentenceFailedValidation)
+	case thinContext:
+		return fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
 			b.cfg.MinOrder, b.cfg.MaxOrder, b.cfg.MinSupport, barkov.ErrInsufficientSupport)
+	default:
+		return fmt.Errorf("barkov: no observed context at orders %d..%d: %w",
+			b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
 	}
-	return zero, fmt.Errorf("barkov: no observed context at orders %d..%d: %w",
-		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
 }
 
-// moveEscape samples the interpolated mixture over context orders exactly,
-// conditioned on copy steering. Each usable order m gets mixture weight a_m
-// (the probability that escaping stops there) times Z_m, the share of its
-// followers steering still allows; an order is drawn in proportion to
-// a_m·Z_m and a follower from its filtered distribution. Filtering and
-// renormalising each order alone would skew the mixture (an order left with
-// only END would hand END that order's entire weight).
-//
-// Orders whose context starts with two Begins repeat the shorter
-// message-start context and are skipped, so start padding counts once. The
-// shortest usable order takes the remaining escape mass.
-func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, error) {
-	type component struct {
-		m      int
-		idx    barkov.ChoicesIndex
-		weight float64
-	}
-	var comps [8]component
-	n := 0
-	sawState, sawSupported := false, false
-	stay := 1.0 // probability that escaping reaches the current order
-	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
-		tail := window[len(window)-m:]
-		if m > b.cfg.MinOrder && tail[0] == b.sentinels.Begin && tail[1] == b.sentinels.Begin {
-			continue
-		}
-		idx, ok := b.tables[m-1].lookupTail(tail)
-		if !ok {
-			continue
-		}
-		sawState = true
-		if uint32(idx.Obs) < uint32(b.cfg.MinSupport) {
-			continue
-		}
-		sawSupported = true
-		e := 0.0
-		if m > b.cfg.MinOrder {
-			e = b.escapeProbability(m, idx)
-		}
-		comps[n] = component{m, idx, stay * (1 - e)}
-		n++
-		stay *= e
-	}
-	if n > 0 {
-		comps[n-1].weight += stay // no shorter order left to escape to
-	}
-	var total float64
-	for i := range n {
-		comps[i].weight *= b.allowedShare(comps[i].m, comps[i].idx, window, sv, probeBuf)
-		total += comps[i].weight
-	}
-	var zero TokenID
-	if total > 0 {
-		pick := b.float64() * total
-		for i := range n {
-			if pick -= comps[i].weight; pick < 0 || i == n-1 {
-				if tok, ok := b.sample(comps[i].m, comps[i].idx, window, sv, probeBuf); ok {
-					return tok, nil
-				}
-			}
-		}
-	}
-	if sawSupported {
-		return zero, fmt.Errorf("barkov: all continuations extend a verbatim run: %w", barkov.ErrSentenceFailedValidation)
-	}
-	if sawState {
-		return zero, fmt.Errorf("barkov: observed contexts at orders %d..%d have fewer than %d observations: %w",
-			b.cfg.MinOrder, b.cfg.MaxOrder, b.cfg.MinSupport, barkov.ErrInsufficientSupport)
-	}
-	return zero, fmt.Errorf("barkov: no observed context at orders %d..%d: %w",
-		b.cfg.MinOrder, b.cfg.MaxOrder, barkov.ErrStateNotFound)
-}
-
-// allowedShare is the fraction of the order-m state's observations that
-// copy steering allows after window (1 when steering is off).
-func (b *backoffCore) allowedShare(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) float64 {
-	if sv.mode == steerOff {
-		return 1
-	}
-	if idx.Count == 1 {
-		if b.filtered(sv, window, TokenID(idx.Offset), probeBuf) {
-			return 0
-		}
-		return 1
-	}
-	choices, cum := b.tables[m-1].slices(idx)
-	var allowed, prev uint32
-	for i, tok := range choices {
-		if !b.filtered(sv, window, tok, probeBuf) {
-			allowed += cum[i] - prev
-		}
-		prev = cum[i]
-	}
-	return float64(allowed) / float64(cum[len(cum)-1])
-}
-
-// CopiesRun implements BackoffChain.
-func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
-	r := b.cfg.MaxVerbatim
-	if r <= 0 {
-		return false
-	}
-	for i := 0; i+r <= len(tokens); i++ {
-		if _, ok := b.tables[r-1].lookupTail(tokens[i : i+r]); ok {
-			return true
-		}
-	}
-	return false
-}
-
-// IsFragment implements BackoffChain. Every run of up to MaxOrder tokens
-// inside a message is the context before its next token (or END), so the
-// run is a key of the table of its own length.
+// IsFragment implements BackoffChain. Every run inside a message is the
+// context before its next token, so it is a key of the table of its length.
 func (b *backoffCore) IsFragment(tokens []TokenID) bool {
 	if len(tokens) == 0 || len(tokens) > b.cfg.MaxOrder {
 		return false
 	}
 	_, ok := b.tables[len(tokens)-1].lookupTail(tokens)
 	return ok
-}
-
-// escapeProbability is escape·T/(N+T) for the order-m state idx, capped at 1.
-func (b *backoffCore) escapeProbability(m int, idx barkov.ChoicesIndex) float64 {
-	t := float64(idx.Count)
-	n := float64(idx.Obs)
-	if idx.Count > 1 {
-		_, cum := b.tables[m-1].slices(idx)
-		n = float64(cum[len(cum)-1])
-	}
-	return min(1, b.escape*t/(n+t))
-}
-
-// float64 draws from [0, 1) using the configured RNG.
-func (b *backoffCore) float64() float64 {
-	if b.rng != nil {
-		return b.rng.Float64()
-	}
-	return rand.Float64()
-}
-
-// runLongEnough reports whether the window's last MaxVerbatim-1 tokens
-// are all real (no Begin sentinel): only then can emitting a candidate
-// complete a MaxVerbatim-length run of real tokens worth filtering.
-// Matches the per-window validator, which also only sees full windows.
-func (b *backoffCore) runLongEnough(window []TokenID) bool {
-	for _, tok := range window[len(window)-(b.cfg.MaxVerbatim-1):] {
-		if tok == b.sentinels.Begin {
-			return false
-		}
-	}
-	return true
-}
-
-// steerMode classifies the per-step steering snapshot.
-type steerMode uint8
-
-const (
-	steerOff    steerMode = iota // steering inactive (or nothing to filter)
-	steerSingle                  // steering state has exactly one follower
-	steerSet                     // small follower set: linear membership scan
-	steerBig                     // large follower set: per-candidate table probe
-)
-
-// steerView is the per-step snapshot of the steering state: the followers
-// of the window's last MaxVerbatim-1 tokens in the order-(MaxVerbatim-1)
-// table. A candidate completes a verbatim corpus MaxVerbatim-gram iff it
-// belongs to that follower set, because the (MaxVerbatim-1)-gram's followers are
-// exactly the tokens that complete a corpus MaxVerbatim-gram. So one
-// lookup per step replaces the per-candidate probes of the larger
-// order-MaxVerbatim table that steering used to cost.
-type steerView struct {
-	mode   steerMode
-	single TokenID   // steerSingle: the sole follower
-	set    []TokenID // steerSet: follower slice (aliases chain storage; read-only)
-}
-
-// steerProbeFallback caps the follower-set size handled by membership
-// scan; larger sets fall back to one order-MaxVerbatim table probe per
-// candidate (the pre-snapshot behavior). On prose corpora ~98% of
-// steering states have a single follower and >99% have at most two, so
-// the fallback is reached only from a handful of high-fanout states.
-const steerProbeFallback = 16
-
-// steerSnapshot resolves the steering state for window once: the
-// order-(r-1) table entry for the window's last r-1 tokens, where
-// r = MaxVerbatim. The zero value (steerOff) means no candidate can
-// complete a verbatim gram at this step.
-func (b *backoffCore) steerSnapshot(window []TokenID) steerView {
-	r := b.cfg.MaxVerbatim
-	idx, ok := b.tables[r-2].lookupTail(window[len(window)-(r-1):])
-	if !ok {
-		return steerView{}
-	}
-	if idx.Count == 1 {
-		return steerView{mode: steerSingle, single: TokenID(idx.Offset)}
-	}
-	set, _ := b.tables[r-2].slices(idx)
-	if len(set) > steerProbeFallback {
-		return steerView{mode: steerBig}
-	}
-	return steerView{mode: steerSet, set: set}
-}
-
-// filtered reports whether emitting tok after window would complete a
-// verbatim MaxVerbatim-gram. End is never filtered: no order-MaxVerbatim
-// state contains End (windows stop before it), so the original
-// per-candidate probe always missed for End, but End IS present in
-// follower sets as the terminal transition, so it must be excluded
-// explicitly here to preserve those semantics (and let sentences
-// terminate under maximal steering).
-func (b *backoffCore) filtered(sv steerView, window []TokenID, tok TokenID, probeBuf *[8]TokenID) bool {
-	if tok == b.sentinels.End {
-		return false
-	}
-	switch sv.mode {
-	case steerSingle:
-		return tok == sv.single
-	case steerSet:
-		for _, f := range sv.set {
-			if f == tok {
-				return true
-			}
-		}
-		return false
-	case steerBig:
-		return b.wouldExtendVerbatim(window, tok, probeBuf)
-	}
-	return false
-}
-
-// wouldExtendVerbatim reports whether emitting tok after window would
-// complete a MaxVerbatim-gram that appears verbatim in the corpus. The
-// order-R table doubles as the R-gram existence set: a context state
-// exists iff that R-gram occurs inside a message. END can never be
-// filtered: no state contains END, so the probe (.., END) always misses
-// and sentences can always terminate. probe is the caller's per-step
-// scratch buffer (see moveTail). Used only on the steerBig fallback path;
-// the common path tests follower-set membership via filtered instead.
-func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID, probe *[8]TokenID) bool {
-	r := b.cfg.MaxVerbatim
-	copy(probe[:r-1], window[len(window)-(r-1):])
-	probe[r-1] = tok
-	_, exists := b.tables[r-1].lookupTail(probe[:r])
-	return exists
-}
-
-// sample draws a follower from the order-m state idx, reproducing
-// pickFollow semantics: Count==1 states pack the follower into Offset;
-// otherwise a weighted draw over the cumulative distribution. With
-// steering active, candidates that would extend a verbatim run are
-// excluded and the survivors keep their original weights; ok=false
-// means every candidate was filtered.
-func (b *backoffCore) sample(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, bool) {
-	if idx.Count == 1 {
-		tok := TokenID(idx.Offset)
-		if sv.mode != steerOff && b.filtered(sv, window, tok, probeBuf) {
-			return 0, false
-		}
-		return tok, true
-	}
-	choices, cum := b.tables[m-1].slices(idx)
-	if sv.mode == steerOff {
-		return choices[b.draw(cum)], true
-	}
-	if sv.mode == steerBig {
-		// Membership test is a table probe here, so keep the weighted
-		// reservoir (one probe per candidate, no second pass): each
-		// survivor replaces the pick with probability weight/totalSoFar,
-		// an exact weighted draw over the filtered set.
-		var pick TokenID
-		var total uint32
-		var prev uint32
-		for i, tok := range choices {
-			w := cum[i] - prev
-			prev = cum[i]
-			if b.filtered(sv, window, tok, probeBuf) {
-				continue
-			}
-			total += w
-			if b.uint32n(total) < w {
-				pick = tok
-			}
-		}
-		if total == 0 {
-			return 0, false
-		}
-		return pick, true
-	}
-	// Membership test is a cheap compare/scan, so do a two-pass weighted
-	// draw: total the survivors' weights, then draw once and walk. Same
-	// distribution as a draw over the filtered set, but one RNG call
-	// instead of one per survivor: order-1 contexts can have thousands
-	// of candidates.
-	var total uint32
-	var prev uint32
-	for i := range choices {
-		w := cum[i] - prev
-		prev = cum[i]
-		if !b.filtered(sv, window, choices[i], probeBuf) {
-			total += w
-		}
-	}
-	if total == 0 {
-		return 0, false
-	}
-	choiceNum := b.uint32n(total)
-	prev = 0
-	var acc uint32
-	for i := range choices {
-		w := cum[i] - prev
-		prev = cum[i]
-		if b.filtered(sv, window, choices[i], probeBuf) {
-			continue
-		}
-		acc += w
-		if acc > choiceNum {
-			return choices[i], true
-		}
-	}
-	return 0, false // unreachable: acc climbs to total > choiceNum
-}
-
-// uint32n draws from [0, n) using the configured RNG.
-func (b *backoffCore) uint32n(n uint32) uint32 {
-	if b.rng != nil {
-		return b.rng.Uint32N(n)
-	}
-	return rand.Uint32N(n)
-}
-
-// draw picks an index into a cumulative distribution by weight.
-func (b *backoffCore) draw(cum []uint32) int {
-	choiceNum := b.uint32n(cum[len(cum)-1])
-	return scanCumDist(cum, choiceNum)
-}
-
-// scanCumDist returns the first index whose cumulative weight exceeds
-// choiceNum. Fanout averages ~1.1-1.8, so a linear scan wins for small
-// groups; begin-state fanouts in the thousands flip the crossover to
-// binary search.
-func scanCumDist(cum []uint32, choiceNum uint32) int {
-	if len(cum) <= 16 {
-		for i, c := range cum {
-			if c > choiceNum {
-				return i
-			}
-		}
-		return len(cum) - 1 // unreachable: choiceNum < cum[len-1]
-	}
-	return sort.Search(len(cum), func(i int) bool { return cum[i] > choiceNum })
-}
-
-// buildBackoffCore builds one indexedCore per order 1..MaxOrder, one
-// corpus pass each. The per-order builds are independent (corpus is
-// read-only, each goroutine writes its own table slot), so they run
-// concurrently. A MaxOrder-6 build is six full passes, and wall time
-// drops to roughly the slowest single pass on multicore machines.
-func buildBackoffCore(cfg BackoffConfig, corpus [][]TokenID) *backoffCore {
-	tables := make([]orderTable, cfg.MaxOrder)
-	var wg sync.WaitGroup
-	for m := 1; m <= cfg.MaxOrder; m++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			tables[m-1] = buildOrderTable(m, corpus)
-		}()
-	}
-	wg.Wait()
-	var contexts *contextIndex
-	if cfg.MinOrder > 1 {
-		contexts = newContextIndex(tables[cfg.MinOrder-1], cfg.MinOrder, cfg.MinSupport)
-	}
-	return &backoffCore{
-		tables:    tables,
-		contexts:  contexts,
-		cfg:       cfg,
-		sentinels: DefaultSentinels(),
-		encoder:   PackedEncoder{},
-	}
-}
-
-// buildOrderTable monomorphizes buildIndexedCore for one order.
-func buildOrderTable(order int, corpus [][]TokenID) orderTable {
-	switch order {
-	case 1:
-		return buildIndexedCore[[1]TokenID](corpus)
-	case 2:
-		return buildIndexedCore[[2]TokenID](corpus)
-	case 3:
-		return buildIndexedCore[[3]TokenID](corpus)
-	case 4:
-		return buildIndexedCore[[4]TokenID](corpus)
-	case 5:
-		return buildIndexedCore[[5]TokenID](corpus)
-	case 6:
-		return buildIndexedCore[[6]TokenID](corpus)
-	case 7:
-		return buildIndexedCore[[7]TokenID](corpus)
-	case 8:
-		return buildIndexedCore[[8]TokenID](corpus)
-	default:
-		panic(fmt.Sprintf("interned: order %d outside supported range 1..8", order))
-	}
-}
-
-// BuildBackoff constructs a variable-order chain from a pre-interned
-// corpus: at each step the walk uses the longest context (up to
-// cfg.MaxOrder) with at least cfg.MinSupport corpus observations, backing
-// off to shorter contexts down to MinOrder where the data is
-// thin. Compared to a fixed-order chain, which replays corpus spans
-// verbatim wherever a long context has exactly one continuation, backoff
-// samples where the corpus genuinely branches.
-//
-// The zero-value config gives MaxOrder 6, MinOrder 1, MinSupport 1, and verbatim
-// steering at window MaxOrder. Panics on out-of-range config values,
-// matching the Build convention.
-//
-// The returned value implements barkov.GenerativeChain[TokenID] with
-// StateSize() == MaxOrder; Gen/GenIter work unchanged. Deterministic
-// tests reach the RNG through barkov.RNGSettable:
-//
-//	chain := interned.BuildBackoff(interned.BackoffConfig{}, encoded)
-//	chain.(barkov.RNGSettable).SetRNG(r)
-func BuildBackoff(cfg BackoffConfig, corpus [][]TokenID) barkov.GenerativeChain[TokenID] {
-	cfg = cfg.withDefaults()
-	return wrapBackoff(buildBackoffCore(cfg, corpus))
-}
-
-func wrapBackoff(core *backoffCore) BackoffChain {
-	switch core.cfg.MaxOrder {
-	case 2:
-		return &backoffChain2{core}
-	case 3:
-		return &backoffChain3{core}
-	case 4:
-		return &backoffChain4{core}
-	case 5:
-		return &backoffChain5{core}
-	case 6:
-		return &backoffChain6{core}
-	case 7:
-		return &backoffChain7{core}
-	case 8:
-		return &backoffChain8{core}
-	default:
-		panic("unreachable: withDefaults validated MaxOrder")
-	}
 }

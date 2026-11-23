@@ -3,7 +3,9 @@ package interned
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"testing/iotest"
 
@@ -13,7 +15,7 @@ import (
 func modelFixture() ModelSnapshot {
 	v := NewVocabulary()
 	corpus := v.InternCorpus([][]string{{"one", "two", "three"}, {"one", "four", "five"}, {"one", "two", "three"}})
-	return ModelSnapshot{Vocabulary: v, Forward: BuildBackoff(BackoffConfig{MaxOrder: 2, MaxVerbatim: -1}, corpus).(BackoffChain)}
+	return ModelSnapshot{Vocabulary: v, Forward: BuildBackoff(BackoffConfig{MaxOrder: 2, MaxVerbatim: -1}, corpus)}
 }
 
 func TestSnapshotRejectsInvalidTables(t *testing.T) {
@@ -79,4 +81,56 @@ func (w *limitedSnapshotWriter) Write(p []byte) (int, error) {
 		return n, io.ErrClosedPipe
 	}
 	return n, nil
+}
+
+func TestSnapshotTrailingDataAndReadErrors(t *testing.T) {
+	s := modelFixture()
+	var buf bytes.Buffer
+	if _, err := s.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	valid := buf.Bytes()
+
+	t.Run("trailing data reports clean error", func(t *testing.T) {
+		_, err := ReadModelSnapshot(bytes.NewReader(append(bytes.Clone(valid), 0x42)))
+		if !errors.Is(err, ErrInvalidSnapshot) {
+			t.Fatalf("got %v, want ErrInvalidSnapshot", err)
+		}
+		if strings.Contains(err.Error(), "<nil>") || !strings.Contains(err.Error(), "trailing data") {
+			t.Fatalf("unexpected trailing data error text: %q", err.Error())
+		}
+	})
+
+	t.Run("trailing read error unwraps cause", func(t *testing.T) {
+		r := io.MultiReader(bytes.NewReader(valid), iotest.ErrReader(io.ErrClosedPipe))
+		_, err := ReadModelSnapshot(r)
+		if !errors.Is(err, ErrInvalidSnapshot) || !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("got %v, want ErrInvalidSnapshot wrapping io.ErrClosedPipe", err)
+		}
+	})
+
+	t.Run("magic read error is not disguised as bad format", func(t *testing.T) {
+		_, err := ReadModelSnapshot(iotest.ErrReader(io.ErrClosedPipe))
+		if !errors.Is(err, io.ErrClosedPipe) || errors.Is(err, ErrInvalidSnapshot) {
+			t.Fatalf("got %v, want io.ErrClosedPipe", err)
+		}
+		if _, err := ReadModelSnapshot(bytes.NewReader([]byte("BADMAGIC"))); !errors.Is(err, ErrInvalidSnapshot) {
+			t.Fatalf("wrong magic got %v, want ErrInvalidSnapshot", err)
+		}
+	})
+}
+
+func TestSnapshotWriteToPreservesWriterError(t *testing.T) {
+	s := modelFixture()
+	for i := range 80 {
+		s.Vocabulary.Intern(fmt.Sprintf("%04d_%s", i, strings.Repeat("a", 1024)))
+	}
+	s.Vocabulary.Intern(strings.Repeat("x", 1<<20+1))
+
+	if _, err := s.WriteTo(&limitedSnapshotWriter{left: 1000}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("writer error swallowed: got %v, want io.ErrClosedPipe", err)
+	}
+	if _, err := s.WriteTo(io.Discard); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("oversized token with healthy writer: got %v, want ErrInvalidSnapshot", err)
+	}
 }

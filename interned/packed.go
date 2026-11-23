@@ -1,10 +1,8 @@
 package interned
 
-import (
-	"unsafe"
-)
+import "unsafe"
 
-// PackedEncoder encodes sequences of TokenIDs as little-endian uint32 bytes,
+// PackedEncoder encodes sequences of TokenIDs as native-endian uint32 bytes,
 // 4 bytes per token. Implements barkov.StateEncoder[TokenID].
 type PackedEncoder struct{}
 

@@ -33,7 +33,7 @@ func (b *backoffCore) Options(window []TokenID) ([]OrderOptions, int) {
 		if ok {
 			o.Found = true
 			if idx.Count == 1 {
-				o.Followers, o.Counts = []TokenID{TokenID(idx.Offset)}, []uint32{uint32(idx.Obs)}
+				o.Followers, o.Counts = []TokenID{TokenID(idx.Offset)}, []uint32{idx.Obs}
 			} else {
 				followers, cum := b.tables[m-1].slices(idx)
 				o.Followers = followers

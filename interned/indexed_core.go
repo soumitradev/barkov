@@ -2,64 +2,38 @@ package interned
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"slices"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
 )
 
-// indexedCore is the key-type-parameterised core shared by every
-// indexedChainN. K is always a pointer-free fixed-size array
-// type (e.g. [4]TokenID) so the state map's bucket array is invisible to
-// the GC: mark cycles skip it entirely instead of walking hundreds of
-// thousands of string headers per scan.
-//
-// The per-N wrapper types in indexed.go / indexed_variants.go embed
-// *indexedCore[K] by pointer; the wrappers carry no data of their own
-// and exist only to give each stateSize its own distinct type so that
-// (for example) FastMoverKey[[3]TokenID, TokenID] and
-// FastMoverKey[[4]TokenID, TokenID] are separate interfaces.
+// indexedCore is a fixed-order chain keyed by K = [N]TokenID. Keeping K
+// pointer-free lets the GC skip the state table's entries entirely.
 type indexedCore[K comparable] struct {
+	random
 	Model     *stateMap[K, barkov.ChoicesIndex]
 	Choices   []TokenID
 	CumDist   []uint32
 	sentinels barkov.Sentinels[TokenID]
 	encoder   PackedEncoder
-	rng       *rand.Rand
-	stateSize int // = unsafe.Sizeof(K)/4; stored once for StateSize/Move
+	stateSize int
 }
-
-// SetRNG overrides the random source used by Move. Intended for
-// deterministic benchmarks and tests; not safe for concurrent use.
-func (c *indexedCore[K]) SetRNG(r *rand.Rand) { c.rng = r }
 
 func (c *indexedCore[K]) StateSize() int                        { return c.stateSize }
 func (c *indexedCore[K]) Sentinels() barkov.Sentinels[TokenID]  { return c.sentinels }
 func (c *indexedCore[K]) Encoder() barkov.StateEncoder[TokenID] { return c.encoder }
 
-// pickFollow resolves a ChoicesIndex to a TokenID. Fanout-1 states pack
-// the follower TokenID into Offset at build time, so the hot path returns
-// without touching Choices[]: one fewer cache miss per Count==1 lookup,
-// which dominates most corpora.
 func (c *indexedCore[K]) pickFollow(idx barkov.ChoicesIndex) TokenID {
+	// Fanout-1 states keep their only follower in Offset, which saves a
+	// Choices load on the most common lookup
 	if idx.Count == 1 {
 		return TokenID(idx.Offset)
 	}
-	cumDist := c.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
-	choices := c.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
-	var choiceNum uint32
-	if c.rng != nil {
-		choiceNum = c.rng.Uint32N(cumDist[len(cumDist)-1])
-	} else {
-		choiceNum = rand.Uint32N(cumDist[len(cumDist)-1])
-	}
-	return choices[scanCumDist(cumDist, choiceNum)]
+	choices, cumDist := c.slices(idx)
+	return choices[c.draw(cumDist)]
 }
 
-// MoveKey satisfies barkov.FastMoverKey[K, TokenID]. Gen uses this path
-// when the chain's stateSize matches a registered FastMoverKey[[N]T, T],
-// bypassing encoder.Encode + the Move(string) roundtrip.
 func (c *indexedCore[K]) MoveKey(key K) (TokenID, error) {
 	idx, ok := c.Model.Get(key)
 	if !ok {
@@ -68,11 +42,8 @@ func (c *indexedCore[K]) MoveKey(key K) (TokenID, error) {
 	return c.pickFollow(idx), nil
 }
 
-// Move satisfies barkov.GenerativeChain[TokenID]. The packed-encoder
-// byte layout is identical to K's in-memory layout (both little-endian
-// uint32s back-to-back), so we can reinterpret the string bytes as K
-// without a decode loop. Little-endian is already assumed elsewhere via
-// binary.LittleEndian.Put/AppendUint32.
+// Move reads the state string as K directly, since PackedEncoder lays
+// tokens out exactly as K holds them in memory
 func (c *indexedCore[K]) Move(state string) (TokenID, error) {
 	if len(state) != c.stateSize*4 {
 		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, barkov.ErrStateNotFound)
@@ -85,18 +56,9 @@ func (c *indexedCore[K]) Move(state string) (TokenID, error) {
 	return c.pickFollow(idx), nil
 }
 
-// buildIndexedCore builds the indexed chain for any pointer-free fixed-size
-// K = [N]TokenID. Mirrors Chain[TokenID].BuildCompressed, but keyed on K
-// rather than a string. The caller is expected to pre-intern the corpus
-// via Vocabulary.InternCorpus and to select a K whose byte size matches
-// stateSize*4.
-//
-// The state table is built once and reused as the final Model: during the
-// corpus scan each slot's ChoicesIndex holds the dense observation index
-// (Offset = idx+1, so no legitimate value equals the zero-slot sentinel);
-// the grouping pass then overwrites every slot in place via forEach. This
-// skips the separate rehash-and-insert pass (and its allocation) that
-// copying unique states into a fresh table used to cost.
+// buildIndexedCore mirrors Chain[TokenID].BuildCompressed keyed on K. The
+// state table doubles as the final Model: the corpus scan stores each
+// state's dense index in Offset and the grouping pass overwrites it in place.
 func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 	var zero K
 	stateSize := int(unsafe.Sizeof(zero)) / 4
@@ -115,9 +77,6 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		totalObs += len(run) + 1
 	}
 
-	// Observed unique-states/observations ratios on the public corpus:
-	// 0.08, 0.43, 0.73 for N=1,2,3 and ~0.84 for N>=4. Sizing the table to
-	// the estimate skips growth rehashes; the odd miss just grows.
 	estUnique := int(float64(totalObs)*stateRatioEst(stateSize)) + 64
 	stateIdx := newStateMap[K, barkov.ChoicesIndex](estUnique)
 	items := make([]TokenID, 0, stateSize+maxLen+1)
@@ -133,10 +92,9 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		items = append(items, sentinels.End)
 
 		for i := 0; i < len(run)+1; i++ {
-			// Window items[i:i+stateSize] has length stateSize = sizeof(K)/4,
-			// so reinterpreting the first stateSize*4 bytes as K is safe.
 			key := *(*K)(unsafe.Pointer(&items[i]))
 			follow := items[i+stateSize]
+			// Offset = idx+1 so no state's placeholder equals the empty-slot zero value
 			existing, found := stateIdx.GetOrSet(key, barkov.ChoicesIndex{Offset: numStates + 1})
 			var idx uint32
 			if found {
@@ -150,9 +108,8 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		}
 	}
 
-	// Per-state linked list of observation indices. head[s] is the latest
-	// observation index for state s (or -1); next[i] is the prior obs idx
-	// sharing the same state.
+	// Chain each state's observations: head[s] is its latest and next[i]
+	// the one before i, -1 ending the list
 	head := make([]int32, numStates)
 	for i := range head {
 		head[i] = -1
@@ -171,100 +128,16 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		stateSize: stateSize,
 	}
 
-	// Walk each state's linked list; dedupe follows into cc.Choices/CumDist.
-	// Small groups (<=16) dedupe via linear scan (beats map hashing and
-	// allocates nothing); large groups collect into a reusable sort buffer
-	// and sort with slices.Sort (pdqsort), avoiding map allocation, hashing,
-	// and mapclear overhead. The finished ChoicesIndex is written back into
-	// the table slot in place.
-	const linearThreshold = 16
 	var sortBuf []TokenID
 	stateIdx.forEach(func(_ K, val *barkov.ChoicesIndex) {
-		s := val.Offset - 1
-		offset := uint32(len(cc.Choices))
-		groupStart := len(cc.Choices)
-
-		groupSize := 0
-		for i := head[s]; i != -1; i = next[i] {
-			groupSize++
-		}
-
-		if groupSize <= linearThreshold {
-			for i := head[s]; i != -1; i = next[i] {
-				tok := pendingTok[i]
-				found := false
-				for m := groupStart; m < len(cc.Choices); m++ {
-					if cc.Choices[m] == tok {
-						cc.CumDist[m]++
-						found = true
-						break
-					}
-				}
-				if !found {
-					cc.Choices = append(cc.Choices, tok)
-					cc.CumDist = append(cc.CumDist, 1)
-				}
-			}
-		} else {
-			sortBuf = sortBuf[:0]
-			for i := head[s]; i != -1; i = next[i] {
-				sortBuf = append(sortBuf, pendingTok[i])
-			}
-			slices.Sort(sortBuf)
-
-			var prev TokenID
-			var cnt uint32
-			for idx, tok := range sortBuf {
-				if idx == 0 {
-					prev = tok
-					cnt = 1
-					continue
-				}
-				if tok == prev {
-					cnt++
-				} else {
-					cc.Choices = append(cc.Choices, prev)
-					cc.CumDist = append(cc.CumDist, cnt)
-					prev = tok
-					cnt = 1
-				}
-			}
-			if len(sortBuf) > 0 {
-				cc.Choices = append(cc.Choices, prev)
-				cc.CumDist = append(cc.CumDist, cnt)
-			}
-		}
-
-		count := uint32(len(cc.Choices) - groupStart)
-		var indexOffset uint32
-		if count == 1 {
-			// Fanout-1: pack the follower TokenID into Offset so pickFollow
-			// returns without a Choices[] load. Roll back the unused slot.
-			indexOffset = uint32(cc.Choices[groupStart])
-			cc.Choices = cc.Choices[:groupStart]
-			cc.CumDist = cc.CumDist[:groupStart]
-		} else {
-			var total uint32
-			for m := groupStart; m < len(cc.Choices); m++ {
-				total += cc.CumDist[m]
-				cc.CumDist[m] = total
-			}
-			indexOffset = offset
-		}
-		*val = barkov.ChoicesIndex{
-			Offset: indexOffset,
-			Count:  count,
-			Obs:    uint32(groupSize),
-		}
+		*val, sortBuf = cc.finalizeGroup(head[val.Offset-1], next, pendingTok, sortBuf)
 	})
 	cc.Model = stateIdx
 	return cc
 }
 
-// stateRatioEst approximates the unique-states/observations ratio for a
-// given order on prose corpora (measured on the bundled public corpus).
-// Only used to size the state table; the table grows if the estimate
-// undershoots.
+// stateRatioEst is the unique-states/observations ratio measured on the
+// public corpus, used only to presize the state table
 func stateRatioEst(stateSize int) float64 {
 	switch stateSize {
 	case 1:
@@ -276,4 +149,77 @@ func stateRatioEst(stateSize int) float64 {
 	default:
 		return 0.85
 	}
+}
+
+// Small groups dedupe by linear scan and large ones by sorting, both cheaper
+// than a map per state
+const indexedLinearThreshold = 16
+
+func (cc *indexedCore[K]) finalizeGroup(
+	first int32,
+	next []int32,
+	pendingTok []TokenID,
+	sortBuf []TokenID,
+) (barkov.ChoicesIndex, []TokenID) {
+	groupStart := len(cc.Choices)
+	groupSize := 0
+	for i := first; i != -1; i = next[i] {
+		groupSize++
+	}
+	if groupSize <= indexedLinearThreshold {
+		cc.appendGroupLinear(first, next, pendingTok, groupStart)
+	} else {
+		sortBuf = cc.appendGroupSorted(first, next, pendingTok, sortBuf[:0])
+	}
+
+	count := uint32(len(cc.Choices) - groupStart)
+	if count == 1 {
+		// Pack the only follower into Offset for pickFollow and drop its slot
+		only := uint32(cc.Choices[groupStart])
+		cc.Choices = cc.Choices[:groupStart]
+		cc.CumDist = cc.CumDist[:groupStart]
+		return barkov.ChoicesIndex{Offset: only, Count: 1, Obs: uint32(groupSize)}, sortBuf
+	}
+	var total uint32
+	for m := groupStart; m < len(cc.Choices); m++ {
+		total += cc.CumDist[m]
+		cc.CumDist[m] = total
+	}
+	return barkov.ChoicesIndex{Offset: uint32(groupStart), Count: count, Obs: uint32(groupSize)}, sortBuf
+}
+
+func (cc *indexedCore[K]) appendGroupLinear(first int32, next []int32, pendingTok []TokenID, groupStart int) {
+	for i := first; i != -1; i = next[i] {
+		tok := pendingTok[i]
+		if m := slices.Index(cc.Choices[groupStart:], tok); m >= 0 {
+			cc.CumDist[groupStart+m]++
+			continue
+		}
+		cc.Choices = append(cc.Choices, tok)
+		cc.CumDist = append(cc.CumDist, 1)
+	}
+}
+
+func (cc *indexedCore[K]) appendGroupSorted(first int32, next []int32, pendingTok []TokenID, sortBuf []TokenID) []TokenID {
+	for i := first; i != -1; i = next[i] {
+		sortBuf = append(sortBuf, pendingTok[i])
+	}
+	slices.Sort(sortBuf)
+	if len(sortBuf) == 0 {
+		return sortBuf
+	}
+	prev := sortBuf[0]
+	var cnt uint32 = 1
+	for _, tok := range sortBuf[1:] {
+		if tok == prev {
+			cnt++
+			continue
+		}
+		cc.Choices = append(cc.Choices, prev)
+		cc.CumDist = append(cc.CumDist, cnt)
+		prev, cnt = tok, 1
+	}
+	cc.Choices = append(cc.Choices, prev)
+	cc.CumDist = append(cc.CumDist, cnt)
+	return sortBuf
 }

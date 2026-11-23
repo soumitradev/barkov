@@ -7,11 +7,6 @@ import (
 	"runtime"
 )
 
-// Restoring a sized snapshot reads it in order, checksumming and bounding
-// every section as the sequential reader does, and decodes each table (and
-// each seed index, once its table is ready) on a worker from those bytes.
-// Decoding and validation dominate restore time; they are independent per
-// table. restoreWorkers bounds the undecoded sections held in memory.
 var restoreWorkers = min(6, runtime.GOMAXPROCS(0))
 
 type section struct {
@@ -96,10 +91,10 @@ func (r *sectionReader) readBackoffSections(cfg BackoffConfig, vocab uint32) *ba
 	b := &backoffCore{cfg: cfg, sentinels: DefaultSentinels(), tables: make([]orderTable, cfg.MaxOrder)}
 	sections := make([]*section, cfg.MaxOrder)
 	for order := 1; order <= cfg.MaxOrder && r.d.err == nil; order++ {
-		width := uint64(order+4) * 4
-		sections[order-1] = r.read(20, func(h []byte) uint64 {
+		width := uint64(order+tableMetaFields) * 4
+		sections[order-1] = r.read(tableHeaderBytes, func(h []byte) uint64 {
 			n, choices := binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:])
-			return uint64(n)*width + uint64(choices)*8
+			return uint64(n)*width + uint64(choices)*choiceRecordBytes
 		}, nil, func(d *snapshotDecoder) {
 			b.tables[order-1] = readOrderTable(d, order, vocab)
 		})

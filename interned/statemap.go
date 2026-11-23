@@ -6,38 +6,16 @@ import (
 	"unsafe"
 )
 
-// stateMap is a purpose-built open-addressed hash table keyed by a
-// pointer-free POD K (always [N]TokenID for N ∈ 1..8). It replaces
-// Go's swisstable map on the gen hot path where profiling showed
-// internal/runtime/maps.ctrlGroup.matchH2 burning ~36% of total gen
-// time per probe. Linear probing with bounded load factor turns each
-// lookup into a single contiguous slot read in the common case.
-//
-// Keys are compared with Go's native == (compiler emits memequal for
-// fixed-size PODs). Hashing is an inline multiply-xorshift mixer over
-// the key's 8-byte lanes (see hash): sizeof(K) is a compile-time
-// constant per instantiation, so the mixer compiles to straight-line
-// code with no runtime call, unlike maphash.Comparable. The per-map seed
-// keeps placement unpredictable across instances. Note the mixer is
-// not adversary-grade; that is the right trade for corpus-built
-// tables of integer tuples, where multiply mixing is collision-free
-// in practice.
-//
-// V must be comparable and its zero value must be used as the "slot
-// empty" sentinel, so callers must never insert a zero-valued V. For
-// ChoicesIndex this is free: Count==0 is never valid for a real
-// state (every state has ≥1 follow token). Dropping an occupied
-// bool shrinks [4]TokenID entries from 28→24 bytes (14% denser
-// bucket array), measurably reducing cache-miss cost on the gen-
-// path probe loop.
+// stateMap is a linear-probing hash table for [N]TokenID keys, which beats
+// Go's map on the generation hot path. A zero V marks an empty slot, so
+// callers must never insert one; ChoicesIndex never is, since every state
+// has a follower.
 type stateMap[K comparable, V comparable] struct {
 	entries []stateEntry[K, V]
 	mask    uint32
 	count   uint32
-	// growAt is precomputed len(entries)*loadFactorNum/loadFactorDen so
-	// the hot-path grow check is a single uint32 compare.
-	growAt uint32
-	seed   uint64
+	growAt  uint32 // len(entries)*loadFactorNum/loadFactorDen
+	seed    uint64
 }
 
 type stateEntry[K comparable, V comparable] struct {
@@ -45,16 +23,11 @@ type stateEntry[K comparable, V comparable] struct {
 	val V
 }
 
-// lanePrime is the folded-multiply constant shared by wyhash/romu-style
-// mixers; odd and bit-balanced, it gives full 64-bit avalanche per lane.
+// lanePrime is the multiply constant from Pelle Evensen's rrmxmx mixer
 const lanePrime = 0x9FB21C651E98DF25
 
-// hash mixes key into a probe hash. The lanes are folded serially
-// (h ^= lane; h *= lanePrime) so equal lanes at different positions
-// cannot cancel, and a final xor-multiply-xor avalanche spreads entropy
-// into the low bits the probe mask consumes. The n >= size guards are
-// compile-time constants per K instantiation, so this compiles to
-// straight-line code with one multiply per 8 bytes of key.
+// hash folds the key's 8-byte lanes serially so equal lanes can't cancel.
+// Snapshots store slot positions, so changing it breaks restoring them.
 func (m *stateMap[K, V]) hash(key K) uint64 {
 	n := int(unsafe.Sizeof(key))
 	p := unsafe.Pointer(&key)
@@ -80,20 +53,14 @@ func (m *stateMap[K, V]) hash(key K) uint64 {
 	return h
 }
 
-// Grow at 3/5 load. A prior 0.75 attempt cost ~6% of the gen win, but
-// profile showed Get's cost is ~88% memory latency on the first bucket
-// load, so shrinking the table wins back cache residency that outweighs
-// the ~1 extra probe distance at 0.6 vs 0.5. Power-of-2 rounding lands
-// the fill-time load factor at ~0.3-0.55.
+// Grow at 3/5 load, which measured faster than 0.75
 const (
 	loadFactorNum = 3
 	loadFactorDen = 5
 )
 
-// newStateMap returns a stateMap sized so that `sizeHint` entries
-// fit under the load-factor threshold without a resize.
+// newStateMap returns a stateMap that holds sizeHint entries without growing
 func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
-	// Need capacity such that sizeHint < capacity*loadFactorNum/loadFactorDen.
 	minCap := (sizeHint*loadFactorDen + loadFactorNum - 1) / loadFactorNum
 	capacity := 16
 	for capacity <= minCap {
@@ -108,7 +75,6 @@ func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
 	return m
 }
 
-// Get returns (val, true) if key is present, else (zero, false).
 func (m *stateMap[K, V]) Get(key K) (V, bool) {
 	i := uint32(m.hash(key)) & m.mask
 	var zero V
@@ -124,9 +90,8 @@ func (m *stateMap[K, V]) Get(key K) (V, bool) {
 	}
 }
 
-// GetOrSet returns the existing value for key if present, else inserts
-// newVal and returns (newVal, false). Lets callers avoid a double
-// probe on the build path's "check-then-insert" pattern.
+// GetOrSet returns key's value and true, or inserts newVal and returns it
+// with false
 func (m *stateMap[K, V]) GetOrSet(key K, newVal V) (V, bool) {
 	if m.count >= m.growAt {
 		m.grow()
@@ -182,9 +147,8 @@ func (m *stateMap[K, V]) grow() {
 	}
 }
 
-// forEach calls f once per live entry, in slot order. f receives a
-// pointer to the stored value and may mutate it in place; it must not
-// insert or the table may grow underneath the iteration.
+// forEach lets f mutate each live value in place. f must not insert, or
+// the table could grow underneath the iteration.
 func (m *stateMap[K, V]) forEach(f func(key K, val *V)) {
 	var zero V
 	for i := range m.entries {
@@ -195,7 +159,6 @@ func (m *stateMap[K, V]) forEach(f func(key K, val *V)) {
 	}
 }
 
-// All yields every live entry in slot order.
 func (m *stateMap[K, V]) All() iter.Seq2[K, V] {
 	return func(yield func(K, V) bool) {
 		var zero V
@@ -209,5 +172,4 @@ func (m *stateMap[K, V]) All() iter.Seq2[K, V] {
 	}
 }
 
-// Len returns the number of live entries.
 func (m *stateMap[K, V]) Len() int { return int(m.count) }
