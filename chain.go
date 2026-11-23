@@ -2,128 +2,19 @@ package barkov
 
 import (
 	"fmt"
-	"iter"
 	"math/rand/v2"
 	"sort"
-	"unsafe"
 )
 
-// keyArena is a growable byte slab that hands out non-aliasing substrings
-// for use as map keys. A new chunk is allocated only when the current one
-// cannot fit an appended key; old chunks remain alive because the strings
-// returned by Append reference them. The arena therefore produces N
-// immutable strings using O(log N) allocations regardless of N, replacing
-// the N per-key allocations of a naïve per-call encoder.
-type keyArena struct {
-	chunks [][]byte // retired chunks kept alive by outstanding string refs
-	cur    []byte   // active chunk; we only ever append within its cap
-}
-
-func newKeyArena(initialCap int) *keyArena {
-	if initialCap < 4096 {
-		initialCap = 4096
-	}
-	return &keyArena{cur: make([]byte, 0, initialCap)}
-}
-
-// Append records b as an immutable string key backed by the arena. The
-// returned string's backing storage stays valid for the arena's lifetime
-// because we never overwrite arena bytes once published.
-func (a *keyArena) Append(b []byte) string {
-	need := len(b)
-	if need == 0 {
-		return ""
-	}
-	if cap(a.cur)-len(a.cur) < need {
-		// Retire the current chunk; start a new one big enough for this
-		// key and large enough to amortise future appends.
-		a.chunks = append(a.chunks, a.cur)
-		newCap := cap(a.cur) * 2
-		if newCap < need {
-			newCap = need * 2
-		}
-		if newCap < 4096 {
-			newCap = 4096
-		}
-		a.cur = make([]byte, 0, newCap)
-	}
-	start := len(a.cur)
-	a.cur = append(a.cur, b...)
-	return unsafe.String(&a.cur[start], need)
-}
-
-// keyStream wraps the arena + append-encoder plumbing that every
-// string-keyed corpus scan uses (BuildRaw, BuildCompressed, NGramSet).
-// Callers call probe(window) to get an ephemeral map key and, on a
-// cache miss, intern(probeKey) to upgrade it to a stable heap-backed
-// key. When the encoder does not implement AppendEncoder, probe falls
-// back to the per-call Encode path and intern is a no-op.
-//
-// It holds no per-observation state beyond the scratch buffer, so each
-// probe call overwrites the previous probe's bytes. Callers must not
-// reuse an old probe string after a subsequent probe.
-type keyStream[T comparable] struct {
-	appendEnc AppendEncoder[T]
-	encoder   StateEncoder[T]
-	hasAppend bool
-	scratch   []byte
-	arena     *keyArena
-}
-
-// newKeyStream builds a stream for encoder. arenaCapHint is the initial
-// capacity the arena should size itself for; honoured only when the
-// encoder supplies an AppendEncoder fast path.
-func newKeyStream[T comparable](encoder StateEncoder[T], arenaCapHint int) *keyStream[T] {
-	appendEnc, hasAppend := any(encoder).(AppendEncoder[T])
-	ks := &keyStream[T]{
-		encoder:   encoder,
-		appendEnc: appendEnc,
-		hasAppend: hasAppend,
-	}
-	if hasAppend {
-		ks.scratch = make([]byte, 0, 256)
-		ks.arena = newKeyArena(arenaCapHint)
-	}
-	return ks
-}
-
-// probe returns a string key for the given window. In the AppendEncoder
-// fast path the bytes live in an internal scratch buffer and are valid
-// only until the next probe call; use the string just long enough to
-// probe a map, and call intern to keep a copy. In the plain-encoder
-// fallback the returned string is already heap-backed.
-func (ks *keyStream[T]) probe(window []T) string {
-	if ks.hasAppend {
-		ks.scratch = ks.scratch[:0]
-		ks.scratch = ks.appendEnc.AppendEncoded(ks.scratch, window)
-		return unsafe.String(unsafe.SliceData(ks.scratch), len(ks.scratch))
-	}
-	return ks.encoder.Encode(window)
-}
-
-// intern promotes the current probe bytes to a stable, heap-backed key
-// safe to store long-term. Pass the most recent probe return value as
-// probeKey; when the plain-encoder path is active intern is a no-op
-// and returns probeKey unchanged.
-func (ks *keyStream[T]) intern(probeKey string) string {
-	if ks.hasAppend {
-		return ks.arena.Append(ks.scratch)
-	}
-	return probeKey
-}
-
-// Compile-time check that Chain implements GenerativeChain.
 var _ GenerativeChain[string] = (*Chain[string])(nil)
 
-// Sentinels bundles the begin/end tokens for a given Token type.
-// Users choose values that won't collide with real tokens in their corpus.
+// Sentinels are the tokens framing each run, picked to never appear in the corpus.
 type Sentinels[T comparable] struct {
 	Begin T
 	End   T
 }
 
-// ChainConfig holds the dependencies a Chain needs.
-// Required: StateSize, Sentinels, Encoder.
+// ChainConfig holds what a Chain needs. Every field is required.
 type ChainConfig[T comparable] struct {
 	StateSize int
 	Sentinels Sentinels[T]
@@ -137,13 +28,12 @@ type Chain[T comparable] struct {
 	sentinels Sentinels[T]
 	encoder   StateEncoder[T]
 
+	beginKey     string
 	beginChoices []T
 	beginCumDist []uint32
 }
 
-// NewChain constructs a Chain from a config.
-// This is the generic entry point. For the common string case,
-// use InitChain(stateSize) which fills in defaults.
+// NewChain builds an empty Chain. InitChain covers the common string case.
 func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 	return &Chain[T]{
 		Model:     make(map[string]map[T]uint32),
@@ -153,31 +43,12 @@ func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 	}
 }
 
-// BuildRaw constructs the chain from a pre-encoded corpus. The corpus
-// is already in the target token type T, so no string conversion happens.
-// This is the canonical, generic build path.
-//
-// When the encoder implements AppendEncoder[T], BuildRaw uses a
-// zero-allocation scratch buffer and arena-interned map keys, dropping
-// per-observation allocations to zero on the hot loop. Custom encoders
-// without AppendEncoder fall back to the simple per-call Encode path.
+// BuildRaw counts every transition in corpus into the chain. Encoders that
+// implement AppendEncoder build it without allocating per transition.
 func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-
-	maxLen, totalObs := 0, 0
-	for _, run := range corpus {
-		if len(run) > maxLen {
-			maxLen = len(run)
-		}
-		totalObs += len(run) + 1
-	}
+	beginSeq := c.beginWindow()
+	maxLen, totalObs := corpusShape(corpus)
 	items := make([]T, 0, c.stateSize+maxLen+1)
-
-	// totalObs/4 undershoots actual unique states by ~3.3x on typical
-	// corpora; size eagerly to skip map rehashes.
 	estUnique := totalObs + 64
 	if len(c.Model) == 0 {
 		c.Model = make(map[string]map[T]uint32, estUnique)
@@ -185,11 +56,7 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
 
 	for _, run := range corpus {
-		items = items[:0]
-		items = append(items, beginSeq...)
-		items = append(items, run...)
-		items = append(items, c.sentinels.End)
-
+		items = c.padRun(items, beginSeq, run)
 		for i := 0; i < len(run)+1; i++ {
 			probeKey := ks.probe(items[i : i+c.stateSize])
 			follow := items[i+c.stateSize]
@@ -207,37 +74,51 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	return c
 }
 
-func (c *Chain[T]) precomputeBeginState() {
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
+func (c *Chain[T]) beginWindow() []T {
+	w := make([]T, c.stateSize)
+	for i := range w {
+		w[i] = c.sentinels.Begin
 	}
-	key := c.encoder.Encode(beginSeq)
-	if choices, ok := c.Model[key]; ok {
-		c.beginChoices, c.beginCumDist = calculateCumDist(choices)
-	}
+	return w
 }
 
-// Implements GenerativeChain[T].
+func corpusShape[T any](corpus [][]T) (maxLen, totalObs int) {
+	for _, run := range corpus {
+		maxLen = max(maxLen, len(run))
+		totalObs += len(run) + 1
+	}
+	return maxLen, totalObs
+}
+
+func (c *Chain[T]) padRun(dst, begin, run []T) []T {
+	dst = append(dst[:0], begin...)
+	dst = append(dst, run...)
+	return append(dst, c.sentinels.End)
+}
+
+func (c *Chain[T]) precomputeBeginState() {
+	c.beginKey = c.encoder.Encode(c.beginWindow())
+	choices := c.Model[c.beginKey]
+	if len(choices) == 0 {
+		c.beginChoices = nil
+		c.beginCumDist = nil
+		return
+	}
+	c.beginChoices, c.beginCumDist = calculateCumDist(choices)
+}
+
 func (c *Chain[T]) StateSize() int           { return c.stateSize }
 func (c *Chain[T]) Sentinels() Sentinels[T]  { return c.sentinels }
 func (c *Chain[T]) Encoder() StateEncoder[T] { return c.encoder }
 
-// Move transitions from a state to a randomly chosen next token.
-// Returns ErrStateNotFound (wrapped with the state) if the state doesn't exist.
+// Move samples the token after state, or returns ErrStateNotFound.
 func (c *Chain[T]) Move(state string) (T, error) {
 	choices, ok := c.Model[state]
 	if !ok {
 		var zero T
 		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
 	}
-
-	// Fast-path for the begin state: reuse precomputed distributions.
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-	if state == c.encoder.Encode(beginSeq) && len(c.beginChoices) > 0 {
+	if state == c.beginKey && len(c.beginChoices) > 0 {
 		return c.beginChoices[chooseToken32(c.beginCumDist)], nil
 	}
 
@@ -245,33 +126,19 @@ func (c *Chain[T]) Move(state string) (T, error) {
 	return keys[chooseToken32(cumDist)], nil
 }
 
-// MoveTokens is a convenience wrapper that encodes the state for the caller.
-// Equivalent to c.Move(c.Encoder().Encode(tokens)) but saves boilerplate.
-// Not part of the GenerativeChain[T] interface.
+// MoveTokens is Move for a state that isn't encoded yet.
 func (c *Chain[T]) MoveTokens(tokens []T) (T, error) {
 	return c.Move(c.encoder.Encode(tokens))
 }
 
-// Prune drops transitions with count < minCount, then removes any state
-// whose transitions are all pruned. Intended for the BuildRaw → Prune →
-// Compress flow; has no effect when minCount <= 1.
-//
-// On prose corpora, minCount=2 typically halves memory by removing the
-// long tail of singleton transitions (often OCR noise, typos, hapax
-// legomena) without materially changing generation quality.
-//
-// Pruning cascades: removing an emptied state can orphan transitions in
-// surviving states that pointed at it, so Prune repeats until no dangling
-// transition remains. That keeps Gen from faulting with ErrStateNotFound
-// mid-walk. Aggressive minCount can therefore cascade away large parts of
-// the chain, including the begin state, leaving a model Gen cannot start
-// from (it then returns ErrStateNotFound). Validate and a begin-state
-// presence check are the caller's preflight before Gen.
+// Prune drops transitions seen fewer than minCount times, then any
+// transition left leading to a missing state, so Gen never faults mid-walk.
+// A high minCount can cascade away the begin state too, leaving Gen nowhere
+// to start. minCount <= 1 keeps everything, and 2 typically halves memory on prose.
 func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
 	if minCount <= 1 {
 		return c
 	}
-	// First pass: drop low-count transitions and any state left empty.
 	for state, choices := range c.Model {
 		for token, count := range choices {
 			if count < minCount {
@@ -283,11 +150,7 @@ func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
 		}
 	}
 
-	// Fixed-point cascade: deleting a state orphans transitions in
-	// surviving states that pointed at it. Repeatedly drop transitions
-	// whose successor state no longer exists (and any state that empties
-	// as a result) until a full pass changes nothing. Transitions to the
-	// End sentinel are terminal and never dangling.
+	// Dropping a state orphans transitions into it, so repeat until nothing changes
 	for {
 		changed := false
 		for state, choices := range c.Model {
@@ -315,11 +178,6 @@ func (c *Chain[T]) Prune(minCount uint32) *Chain[T] {
 	return c
 }
 
-// successorKey returns the encoded key of the state reached by taking
-// transition token out of the state whose decoded tokens are toks. The
-// successor of state [t0 t1 … t_{n-1}] on token x is the window shifted
-// left by one: [t1 … t_{n-1} x]. Callers must not pass the End sentinel
-// as token: transitions to End are terminal and have no successor state.
 func (c *Chain[T]) successorKey(toks []T, token T) string {
 	next := make([]T, len(toks))
 	copy(next, toks[1:])
@@ -327,15 +185,8 @@ func (c *Chain[T]) successorKey(toks []T, token T) string {
 	return c.encoder.Encode(next)
 }
 
-// Validate walks the model and returns a descriptive error naming the
-// first transition whose successor state is absent (a dangling transition
-// that would fault Gen with ErrStateNotFound mid-walk), or nil if every
-// non-terminal transition resolves. The returned error wraps
-// ErrStateNotFound, so callers can errors.Is it.
-//
-// Prune's cascade already guarantees a clean graph; Validate is opt-in
-// belt-and-braces for callers who mutate Model by hand or want to assert
-// the invariant before Compress. O(states × fanout).
+// Validate reports the first transition whose successor state is missing,
+// wrapping ErrStateNotFound. Prune never leaves one, but hand edits to Model can.
 func (c *Chain[T]) Validate() error {
 	for state, choices := range c.Model {
 		toks := c.encoder.Decode(state)
@@ -372,327 +223,9 @@ func chooseToken32(cumDist []uint32) int {
 	})
 }
 
-// ChoicesIndex points into the flat Choices/CumDist arrays.
-type ChoicesIndex struct {
-	Offset uint32
-	Count  uint32
-	// Obs is the total number of corpus observations of this state.
-	Obs uint32
-}
-
-// CompressedChain uses a struct-of-arrays layout for cache efficiency.
-type CompressedChain[T comparable] struct {
-	Model     map[string]ChoicesIndex
-	Choices   []T
-	CumDist   []uint32
-	stateSize int
-	sentinels Sentinels[T]
-	encoder   StateEncoder[T]
-	rng       *rand.Rand // nil = use package math/rand/v2
-}
-
-// SetRNG overrides the random source used by Move. Intended for
-// deterministic benchmarks and tests; not safe for concurrent use.
-func (cc *CompressedChain[T]) SetRNG(r *rand.Rand) { cc.rng = r }
-
-// Compile-time checks that CompressedChain implements GenerativeChain and
-// exposes its RNG override through RNGSettable.
-var (
-	_ GenerativeChain[string] = (*CompressedChain[string])(nil)
-	_ RNGSettable             = (*CompressedChain[string])(nil)
-)
-
-// Compress converts the chain to SoA layout for better cache performance.
-//
-// Compress copies transitions verbatim and does not check for dangling
-// successors; if the source Chain was mutated by hand (bypassing Prune's
-// cascade), call Validate first to catch orphaned transitions at build
-// time rather than as an ErrStateNotFound from Gen.
-func (c *Chain[T]) Compress() *CompressedChain[T] {
-	totalEntries := 0
-	for _, choices := range c.Model {
-		totalEntries += len(choices)
-	}
-
-	cc := &CompressedChain[T]{
-		stateSize: c.stateSize,
-		sentinels: c.sentinels,
-		encoder:   c.encoder,
-		Model:     make(map[string]ChoicesIndex, len(c.Model)),
-		Choices:   make([]T, 0, totalEntries),
-		CumDist:   make([]uint32, 0, totalEntries),
-	}
-
-	for state, choices := range c.Model {
-		offset := uint32(len(cc.Choices))
-		var total uint32
-		for k, v := range choices {
-			total += v
-			cc.Choices = append(cc.Choices, k)
-			cc.CumDist = append(cc.CumDist, total)
-		}
-		cc.Model[state] = ChoicesIndex{
-			Offset: offset,
-			Count:  uint32(len(choices)),
-			Obs:    total,
-		}
-	}
-	return cc
-}
-
-// BuildCompressed builds a CompressedChain directly from a corpus, skipping
-// the map-of-maps intermediate that Build+Compress produces. It eliminates
-// the per-state map[T]uint32 allocations and the subsequent Compress
-// iteration over them.
-//
-// Algorithm:
-//  1. Stream observations into two parallel slices: a dense stateIdx per
-//     observation and the follow token. State keys are interned into an
-//     arena; unique states get sequential uint32 indices.
-//  2. Counting-sort by stateIdx to group observations per state. Uses a
-//     linked-list-style placement (head + next arrays) that needs O(obs)
-//     aux memory instead of a full sorted buffer.
-//  3. For each state group, linear-scan dedupe follow tokens directly into
-//     cc.Choices/cc.CumDist for small groups, or fall back to a reusable
-//     counting map for large groups. Then convert counts to cumulative in
-//     place.
-//
-// Result is identical in behaviour to BuildRaw().Compress() except that the
-// order of entries within a state group is unspecified (Compress also has
-// unspecified order due to Go's random map iteration).
-func (c *Chain[T]) BuildCompressed(corpus [][]T) *CompressedChain[T] {
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-
-	maxLen, totalObs := 0, 0
-	for _, run := range corpus {
-		if len(run) > maxLen {
-			maxLen = len(run)
-		}
-		totalObs += len(run) + 1
-	}
-
-	// Observed on the public corpus: numStates ≈ 0.82 * totalObs (fanout
-	// barely >1), so the old estimate of totalObs/4 undershot by ~3.3x,
-	// forcing the map through several rehashes and the slice through
-	// multiple doublings. Using totalObs as the upper bound wastes ~20% in
-	// slack but eliminates all growth cost.
-	estUnique := totalObs + 64
-	stateIdx := make(map[string]uint32, estUnique)
-	stateKeys := make([]string, 0, estUnique)
-	items := make([]T, 0, c.stateSize+maxLen+1)
-
-	pendingState := make([]uint32, 0, totalObs)
-	pendingTok := make([]T, 0, totalObs)
-
-	ks := newKeyStream(c.encoder, estUnique*c.stateSize*8)
-
-	for _, run := range corpus {
-		items = items[:0]
-		items = append(items, beginSeq...)
-		items = append(items, run...)
-		items = append(items, c.sentinels.End)
-
-		for i := 0; i < len(run)+1; i++ {
-			probeKey := ks.probe(items[i : i+c.stateSize])
-			follow := items[i+c.stateSize]
-			idx, ok := stateIdx[probeKey]
-			if !ok {
-				idx = uint32(len(stateKeys))
-				stableKey := ks.intern(probeKey)
-				stateIdx[stableKey] = idx
-				stateKeys = append(stateKeys, stableKey)
-			}
-			pendingState = append(pendingState, idx)
-			pendingTok = append(pendingTok, follow)
-		}
-	}
-
-	numStates := len(stateKeys)
-	// Per-state linked list of observation indices. head[s] is the latest
-	// observation index for state s (or -1); next[i] is the prior obs idx
-	// sharing the same state.
-	head := make([]int32, numStates)
-	for i := range head {
-		head[i] = -1
-	}
-	next := make([]int32, len(pendingState))
-	for i, s := range pendingState {
-		next[i] = head[s]
-		head[s] = int32(i)
-	}
-
-	cc := &CompressedChain[T]{
-		stateSize: c.stateSize,
-		sentinels: c.sentinels,
-		encoder:   c.encoder,
-		Model:     make(map[string]ChoicesIndex, numStates),
-		Choices:   make([]T, 0, totalObs),
-		CumDist:   make([]uint32, 0, totalObs),
-	}
-
-	// Walk each state's linked list; dedupe follows into cc.Choices/CumDist.
-	// Small groups (<=16) dedupe via linear scan (beats map hashing and
-	// allocates nothing); large groups use a reusable counting map whose
-	// bucket storage is cleared and reused across states, amortising cost
-	// at O(group_size) without the O(group²) blowup that linear scan would
-	// suffer on pathological fan-out states like begin.
-	const linearThreshold = 16
-	var countBuf map[T]uint32
-	for s := range numStates {
-		offset := uint32(len(cc.Choices))
-		groupStart := len(cc.Choices)
-
-		groupSize := 0
-		for i := head[s]; i != -1; i = next[i] {
-			groupSize++
-		}
-
-		if groupSize <= linearThreshold {
-			for i := head[s]; i != -1; i = next[i] {
-				tok := pendingTok[i]
-				found := false
-				for m := groupStart; m < len(cc.Choices); m++ {
-					if cc.Choices[m] == tok {
-						cc.CumDist[m]++
-						found = true
-						break
-					}
-				}
-				if !found {
-					cc.Choices = append(cc.Choices, tok)
-					cc.CumDist = append(cc.CumDist, 1)
-				}
-			}
-		} else {
-			if countBuf == nil {
-				countBuf = make(map[T]uint32, groupSize)
-			} else {
-				clear(countBuf)
-			}
-			for i := head[s]; i != -1; i = next[i] {
-				countBuf[pendingTok[i]]++
-			}
-			for tok, cnt := range countBuf {
-				cc.Choices = append(cc.Choices, tok)
-				cc.CumDist = append(cc.CumDist, cnt)
-			}
-		}
-
-		// Convert raw counts to cumulative distribution.
-		var total uint32
-		for m := groupStart; m < len(cc.Choices); m++ {
-			total += cc.CumDist[m]
-			cc.CumDist[m] = total
-		}
-		cc.Model[stateKeys[s]] = ChoicesIndex{
-			Offset: offset,
-			Count:  uint32(len(cc.Choices) - groupStart),
-			Obs:    total,
-		}
-	}
-	return cc
-}
-
-// Implements GenerativeChain[T].
-func (cc *CompressedChain[T]) StateSize() int           { return cc.stateSize }
-func (cc *CompressedChain[T]) Sentinels() Sentinels[T]  { return cc.sentinels }
-func (cc *CompressedChain[T]) Encoder() StateEncoder[T] { return cc.encoder }
-
-// Move transitions from a state to a randomly chosen next token.
-func (cc *CompressedChain[T]) Move(state string) (T, error) {
-	idx, ok := cc.Model[state]
-	if !ok {
-		var zero T
-		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
-	}
-	// Deterministic-choice fast path: when a state has exactly one follower,
-	// we skip RNG, slice construction, and sort.Search.
-	if idx.Count == 1 {
-		return cc.Choices[idx.Offset], nil
-	}
-	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
-	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
-	var choiceNum uint32
-	if cc.rng != nil {
-		choiceNum = cc.rng.Uint32N(cumDist[len(cumDist)-1])
-	} else {
-		choiceNum = rand.Uint32N(cumDist[len(cumDist)-1])
-	}
-	return choices[scanCumDist(cumDist, choiceNum)], nil
-}
-
-// scanCumDist returns the first index whose cumulative weight exceeds
-// choiceNum. State fanout averages ~1.1-1.8 on prose, so a linear scan
-// wins for small groups; begin-state fanouts in the thousands flip the
-// crossover to binary search.
-func scanCumDist(cum []uint32, choiceNum uint32) int {
-	if len(cum) <= 16 {
-		for i, c := range cum {
-			if c > choiceNum {
-				return i
-			}
-		}
-		return len(cum) - 1 // unreachable: choiceNum < cum[len-1]
-	}
-	return sort.Search(len(cum), func(i int) bool { return cum[i] > choiceNum })
-}
-
-// MoveTokens is a convenience wrapper that encodes the state for the caller.
-func (cc *CompressedChain[T]) MoveTokens(tokens []T) (T, error) {
-	return cc.Move(cc.encoder.Encode(tokens))
-}
-
-// ChoicesCumDist returns the choices and cumulative-distribution slices
-// backing a state. The returned slices alias internal storage and must
-// not be modified. Intended for callers that want to implement their
-// own sampling (temperature scaling, repetition penalty, etc.) instead
-// of the uniform weighted draw that Move performs.
-//
-// Returns ErrStateNotFound if the state isn't in the model.
-func (cc *CompressedChain[T]) ChoicesCumDist(state string) (choices []T, cumDist []uint32, err error) {
-	idx, ok := cc.Model[state]
-	if !ok {
-		return nil, nil, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
-	}
-	choices = cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
-	cumDist = cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
-	return choices, cumDist, nil
-}
-
-// StateTotal returns the total observation weight of state (the sum of
-// all its transition counts), or ErrStateNotFound. CumDist is cumulative
-// within each state's group, so the total is the group's last entry, with
-// no iteration over followers needed.
-func (cc *CompressedChain[T]) StateTotal(state string) (uint32, error) {
-	idx, ok := cc.Model[state]
-	if !ok {
-		return 0, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
-	}
-	return cc.CumDist[idx.Offset+uint32(idx.Count)-1], nil
-}
-
-// States iterates all states as decoded token slices with their total
-// weights. The yielded slice is freshly allocated each iteration (via the
-// chain's own encoder) and safe to retain, so callers doing custom
-// scoring never cache an encoder or decode keys by hand. Perf-sensitive
-// callers can iterate Model directly.
-func (cc *CompressedChain[T]) States() iter.Seq2[[]T, uint32] {
-	return func(yield func([]T, uint32) bool) {
-		for state, idx := range cc.Model {
-			total := cc.CumDist[idx.Offset+uint32(idx.Count)-1]
-			if !yield(cc.encoder.Decode(state), total) {
-				return
-			}
-		}
-	}
-}
-
-// InitChain is the zero-configuration constructor for string chains.
-// This is the common entry point for most users.
+// InitChain builds an empty string chain with the default sentinels and encoder.
 func InitChain(stateSize int) *Chain[string] {
+	// A constant literal converts to StateEncoder without allocating, unlike DefaultStringEncoder
 	return NewChain(ChainConfig[string]{
 		StateSize: stateSize,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},

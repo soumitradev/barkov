@@ -114,6 +114,45 @@ func BenchmarkSepEncoderDecode(b *testing.B) {
 
 // --- Generation ---
 
+func BenchmarkChainMove(b *testing.B) {
+	loadBenchmarkFixture(b)
+	enc := SepEncoder{Sep: SEP}
+	beginKey := enc.Encode(testChain.beginWindow())
+	nonBeginKey := enc.Encode(testCorpus[0][:testChain.StateSize()])
+	for _, tokens := range testCorpus {
+		key := enc.Encode(tokens[:testChain.StateSize()])
+		if len(testChain.Model[key]) >= 2 {
+			nonBeginKey = key
+			break
+		}
+	}
+
+	b.Run("begin", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := testChain.Move(beginKey); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("non-begin", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := testChain.Move(nonBeginKey); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkGenRaw(b *testing.B) {
+	loadBenchmarkFixture(b)
+	b.ResetTimer()
+	ctx := context.Background()
+	for b.Loop() {
+		Gen(ctx, testChain) //nolint
+	}
+}
+
 func BenchmarkGen(b *testing.B) {
 	loadBenchmarkFixture(b)
 	b.ResetTimer()

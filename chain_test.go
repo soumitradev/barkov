@@ -146,6 +146,16 @@ func (intEncoder) Decode(state string) []int {
 	return result
 }
 
+// wideBeginCorpus repeats 20 first words so the begin state has more
+// observations than a linear scan dedupes, with repeated followers
+func wideBeginCorpus() [][]string {
+	var corpus [][]string
+	for i := range 60 {
+		corpus = append(corpus, []string{fmt.Sprintf("w%d", i%20), "end"})
+	}
+	return corpus
+}
+
 // TestBuildCompressedEquivalence asserts that the direct BuildCompressed
 // path produces structurally equivalent output to the legacy
 // BuildRaw().Compress() pipeline. Order within a state group is
@@ -177,6 +187,7 @@ func TestBuildCompressedEquivalence(t *testing.T) {
 			{"a", "b"},
 			{"the", "cat", "ran", "away"},
 		}},
+		{"wide_begin", wideBeginCorpus()},
 	}
 
 	for _, tc := range cases {
@@ -505,4 +516,165 @@ func TestPruneCascadePublicCorpus(t *testing.T) {
 			}
 		})
 	}
+}
+
+type countingEncoder struct {
+	inner       SepEncoder
+	encodeCalls int
+}
+
+func (e *countingEncoder) Encode(tokens []string) string {
+	e.encodeCalls++
+	return e.inner.Encode(tokens)
+}
+
+func (e *countingEncoder) Decode(state string) []string {
+	return e.inner.Decode(state)
+}
+
+func TestChainMoveBeginKeyCached(t *testing.T) {
+	enc := &countingEncoder{inner: SepEncoder{Sep: SEP}}
+	chain := NewChain(ChainConfig[string]{
+		StateSize: 2,
+		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
+		Encoder:   enc,
+	})
+	chain.BuildRaw([][]string{
+		{"the", "quick", "brown", "fox"},
+		{"the", "lazy", "dog"},
+		{"a", "small", "cat"},
+	})
+
+	beginKey := enc.inner.Encode([]string{BEGIN, BEGIN})
+	nonBeginKey := enc.inner.Encode([]string{"the", "quick"})
+
+	enc.encodeCalls = 0
+	if _, err := chain.Move(beginKey); err != nil {
+		t.Fatalf("Move(begin): %v", err)
+	}
+	if enc.encodeCalls != 0 {
+		t.Errorf("Move(begin) called Encoder.Encode %d times, want 0", enc.encodeCalls)
+	}
+
+	enc.encodeCalls = 0
+	if _, err := chain.Move(nonBeginKey); err != nil {
+		t.Fatalf("Move(non-begin): %v", err)
+	}
+	if enc.encodeCalls != 0 {
+		t.Errorf("Move(non-begin) called Encoder.Encode %d times, want 0", enc.encodeCalls)
+	}
+
+	// Build a corpus with enough distinct begin followers that falling back to
+	// calculateCumDist would heap-allocate, proving Move(begin) uses beginChoices.
+	wideCorpus := make([][]string, 0, 66)
+	for i := range 64 {
+		wideCorpus = append(wideCorpus, []string{fmt.Sprintf("w%d", i), "end"})
+	}
+	wideCorpus = append(wideCorpus,
+		[]string{"the", "quick", "brown", "fox"},
+		[]string{"the", "quick", "red", "fox"},
+	)
+	plain := InitChain(2).BuildRaw(wideCorpus)
+
+	beginAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := plain.Move(beginKey); err != nil {
+			t.Fatalf("Move(begin): %v", err)
+		}
+	})
+	if beginAllocs != 0 {
+		t.Errorf("Move(begin) allocated %.1f times/op, want 0", beginAllocs)
+	}
+
+	nonBeginAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := plain.Move(nonBeginKey); err != nil {
+			t.Fatalf("Move(non-begin): %v", err)
+		}
+	})
+	if nonBeginAllocs != 0 {
+		t.Errorf("Move(non-begin) allocated %.1f times/op, want 0", nonBeginAllocs)
+	}
+}
+
+func TestChainBeginCacheConsistentAfterPruneAndEmpty(t *testing.T) {
+	enc := SepEncoder{Sep: SEP}
+	beginKey := enc.Encode([]string{BEGIN, BEGIN})
+
+	t.Run("partial prune refreshes begin cache", func(t *testing.T) {
+		chain := InitChain(2).BuildRaw([][]string{
+			{"keep", "a"},
+			{"keep", "a"},
+			{"drop", "b"},
+		})
+		chain.Prune(2)
+
+		for range 50 {
+			tok, err := chain.Move(beginKey)
+			if err != nil {
+				t.Fatalf("Move(begin) after partial prune: %v", err)
+			}
+			if tok != "keep" {
+				t.Fatalf("Move(begin) returned pruned token %q, want %q", tok, "keep")
+			}
+		}
+
+		allocs := testing.AllocsPerRun(100, func() {
+			if _, err := chain.Move(beginKey); err != nil {
+				t.Fatalf("Move(begin): %v", err)
+			}
+		})
+		if allocs != 0 {
+			t.Errorf("Move(begin) after partial prune allocated %.1f times/op, want 0", allocs)
+		}
+	})
+
+	t.Run("full prune clears stale begin cache", func(t *testing.T) {
+		chain := InitChain(2).BuildRaw([][]string{{"stale", "tail"}})
+		chain.Prune(2)
+
+		if _, err := chain.Move(beginKey); !errors.Is(err, ErrStateNotFound) {
+			t.Fatalf("Move(begin) after pruning begin state = %v, want ErrStateNotFound", err)
+		}
+
+		// Re-inserting a begin transition must read Model, not stale beginChoices
+		chain.Model[beginKey] = map[string]uint32{"fresh": 1}
+		for range 20 {
+			tok, err := chain.Move(beginKey)
+			if err != nil {
+				t.Fatalf("Move(begin) after re-insert: %v", err)
+			}
+			if tok != "fresh" {
+				t.Fatalf("Move(begin) served stale token %q after prune, want %q", tok, "fresh")
+			}
+		}
+	})
+
+	t.Run("empty and unbuilt models", func(t *testing.T) {
+		empty := InitChain(2)
+		if _, err := empty.Move(beginKey); !errors.Is(err, ErrStateNotFound) {
+			t.Fatalf("Move on unbuilt chain = %v, want ErrStateNotFound", err)
+		}
+
+		// Hand-inserting empty-string state on unbuilt chain where beginKey == ""
+		empty.Model[""] = map[string]uint32{"ok": 1}
+		tok, err := empty.Move("")
+		if err != nil {
+			t.Fatalf("Move(\"\") on unbuilt chain: %v", err)
+		}
+		if tok != "ok" {
+			t.Fatalf("Move(\"\") = %q, want %q", tok, "ok")
+		}
+
+		// Empty rebuild after clearing Model must clear stale beginChoices
+		rebuilt := InitChain(2).BuildRaw([][]string{{"old", "word"}})
+		clear(rebuilt.Model)
+		rebuilt.BuildRaw(nil)
+		rebuilt.Model[beginKey] = map[string]uint32{"new": 1}
+		tok, err = rebuilt.Move(beginKey)
+		if err != nil {
+			t.Fatalf("Move(begin) after empty rebuild: %v", err)
+		}
+		if tok != "new" {
+			t.Fatalf("Move(begin) served stale token %q after empty rebuild, want %q", tok, "new")
+		}
+	})
 }
