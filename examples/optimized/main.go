@@ -1,18 +1,8 @@
-// Tier 2: the same corpus as examples/simple, but running every lever
-// the library exposes for performance.
+// Tier 2: interned uint32 tokens, PackedEncoder keys, an xxh3-hashed
+// anti-verbatim validator, and WithThreaded generation.
 //
-//   - Tokens interned through a Vocabulary (one uint32 per token instead
-//     of per-message string headers).
-//   - PackedEncoder for state keys (4-byte little-endian per token
-//     instead of SEP-delimited string concatenation).
-//   - nhash.HashNGramSet validator, keyed on xxh3 hashes instead of
-//     full n-gram strings.
-//   - WithThreaded to fan out generation attempts and return the first
-//     that clears the validator.
-//
-// stateSize stays configurable; pick whatever matches your use case.
-// (If yours happens to be 4, see the callout at the bottom of this
-// file for an extra specialisation.)
+// For stateSizes 1-8, swap BuildCompressed for interned.Build(stateSize, encoded)
+// to use fixed-width array keys directly.
 package main
 
 import (
@@ -57,11 +47,8 @@ func main() {
 		fmt.Printf("%d) %s\n", i+1, strings.Join(vocab.DecodeTokens(out), " "))
 	}
 
-	// xxh3-hashed anti-verbatim validator. On a real corpus this rejects
-	// generations that reproduce a corpus n-gram verbatim. On a toy corpus
-	// most outputs are verbatim by construction, so the validator rejects
-	// nearly every attempt. That's expected. WithThreaded runs many attempts
-	// in parallel and keeps the first one that passes.
+	// On a toy corpus most outputs are verbatim, so high rejection is expected.
+	// WithThreaded fans out attempts and returns the first that passes.
 	validator := nhash.New(
 		encoded,
 		compressed.StateSize()+2,
@@ -84,17 +71,3 @@ func main() {
 		fmt.Printf("%d) %s\n", i+1, strings.Join(vocab.DecodeTokens(out), " "))
 	}
 }
-
-// -----------------------------------------------------------------------
-// For stateSizes 1-8, swap the build line for interned.Build. On large
-// corpora we've observed this path running roughly 1.7x faster and using
-// about 35% less memory than the generic build path (see
-// benchstat/pipeline_simple_vs_maxopt.txt). Everything downstream keeps
-// working unchanged. If you need the concrete affordances, assert for the
-// interface you want (SetRNG via barkov.RNGSettable, direct MoveKey via
-// barkov.FastMoverKey[[N]TokenID, TokenID]).
-//
-//	indexed := interned.Build(4, encoded) // stateSize 1..8
-//	indexed.(barkov.RNGSettable).SetRNG(r)
-//	barkov.Gen(ctx, indexed, barkov.WithValidator(validator))
-// -----------------------------------------------------------------------
