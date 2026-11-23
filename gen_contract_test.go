@@ -30,6 +30,28 @@ func TestCustomChainMayRetainStateKeys(t *testing.T) {
 	}
 }
 
+type embeddedRetainingChain struct {
+	*Chain[string]
+	keys []string
+}
+
+func (c *embeddedRetainingChain) Move(key string) (string, error) {
+	c.keys = append(c.keys, key)
+	return c.Chain.Move(key)
+}
+
+func TestEmbeddedChainWrapperMayRetainStateKeys(t *testing.T) {
+	base := InitChain(1).BuildRaw([][]string{{"a", "b", "c"}})
+	chain := &embeddedRetainingChain{Chain: base}
+	if _, err := Gen(context.Background(), chain); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{BEGIN, "a", "b", "c"}
+	if !slices.Equal(chain.keys, want) {
+		t.Fatalf("Move arguments changed after return: got %q, want %q", chain.keys, want)
+	}
+}
+
 type workerChain struct {
 	calls                atomic.Int32
 	active               atomic.Int32

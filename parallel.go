@@ -9,9 +9,7 @@ import (
 	"sync"
 )
 
-// genIterThreaded fans out workers to generate in parallel.
-// The first worker to complete successfully wins; its tokens are
-// replayed through the iterator.
+// genIterThreaded races cfg.parallelism attempts and replays the first success
 func genIterThreaded[T comparable](
 	ctx context.Context,
 	chain GenerativeChain[T],
@@ -28,109 +26,72 @@ func genIterThreaded[T comparable](
 			seedKey = stuckKey(chain.Encoder(), cfg)
 		}
 
-		// Short-circuit if this seed is known-stuck
 		if cfg.stuckCache != nil && cfg.stuckCache.IsStuck(seedKey) {
 			var zero T
 			yield(zero, fmt.Errorf("barkov: seed is stuck: %w", ErrStateNotFound))
 			return
 		}
 
-		// Create a cancellable context for workers
 		workerCtx, cancel := context.WithCancel(ctx)
 
 		resultCh := make(chan result, cfg.parallelism)
 		var wg sync.WaitGroup
 		defer func() { cancel(); wg.Wait() }()
 
-		// Launch workers
 		for range cfg.parallelism {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-
-				// Build a single-threaded config for this worker by
-				// copying the whole struct and zeroing parallelism, so
-				// validatorWidth, outputValidator, and any future field
-				// can't be silently dropped by hand-copying fields.
-				workerCfg := *cfg
-				workerCfg.parallelism = 0
-
-				tokens, err := collectAttempt(workerCtx, chain, &workerCfg)
-				if err != nil {
-					select {
-					case resultCh <- result{err: err}:
-					case <-workerCtx.Done():
-					}
-					return
-				}
-
-				select {
-				case resultCh <- result{tokens: tokens}:
-				case <-workerCtx.Done():
-				}
+				tokens, err := collectAttempt(genIterSingle(workerCtx, chain, cfg), cfg.outputValidator)
+				// Each worker sends once into a buffer sized for all of them, so this never blocks
+				resultCh <- result{tokens: tokens, err: err}
 			}()
 		}
 
-		// Close result channel when all workers are done
 		go func() {
 			wg.Wait()
 			close(resultCh)
 		}()
 
-		// Collect results, return first success
 		var lastErr error
-
 		for res := range resultCh {
 			if res.err != nil {
 				canceled := errors.Is(res.err, context.Canceled) || errors.Is(res.err, context.DeadlineExceeded)
 				if lastErr == nil || !canceled {
 					lastErr = res.err
 				}
-				if cfg.stuckCache != nil && !canceled {
-					cfg.stuckCache.RecordFailure(seedKey)
-				}
-				// Non-retryable: cancel remaining workers
+				// A missing state fails every worker the same way
 				if errors.Is(res.err, ErrStateNotFound) {
 					cancel()
 				}
 				continue
 			}
 
-			// Success
 			if cfg.stuckCache != nil {
 				cfg.stuckCache.RecordSuccess(seedKey)
 			}
 			cancel()
 			wg.Wait()
 
-			for _, tok := range res.tokens {
-				if err := ctx.Err(); err != nil {
-					var zero T
-					yield(zero, err)
-					return
-				}
-				if !yield(tok, nil) {
-					return
-				}
-			}
+			replay(ctx, res.tokens, yield)
 			return
 		}
 
-		// Caller cancellation must not become an empty success if workers drop their results.
+		var zero T
 		if ctx.Err() != nil {
-			lastErr = ctx.Err()
+			yield(zero, ctx.Err())
+			return
 		}
-		// All workers failed
-		if lastErr != nil {
-			var zero T
-			yield(zero, lastErr)
+		// One failed call is one failure, however many workers it ran
+		if cfg.stuckCache != nil {
+			cfg.stuckCache.RecordFailure(seedKey)
 		}
+		yield(zero, lastErr)
 	}
 }
 
-// stuckKey identifies a walk's starting point for the stuck cache. The
-// initial state decides where the walk starts and the seed what it must
-// emit, so both are part of the key. Lengths keep the two encodings apart.
+// stuckKey covers both the seed, which the walk must emit, and the initial
+// state it starts from. The seed's length keeps different splits apart.
 func stuckKey[T comparable](encoder StateEncoder[T], cfg *genConfig[T]) string {
 	seed := encoder.Encode(cfg.seed)
 	return strconv.Itoa(len(seed)) + ":" + seed + encoder.Encode(cfg.initialState)

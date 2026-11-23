@@ -5,8 +5,7 @@ import (
 	"runtime"
 )
 
-// StuckDetector is the interface for stuck-state detection. Implementations
-// track which seeds repeatedly fail and allow short-circuiting retries.
+// StuckDetector tracks seeds that keep failing so retries can stop early.
 // The barkov/stuck subpackage provides the default implementation.
 type StuckDetector interface {
 	RecordFailure(state string) bool // returns true if now considered stuck
@@ -14,11 +13,9 @@ type StuckDetector interface {
 	IsStuck(state string) bool
 }
 
-// SlicePool is an optional pool for reusing slice allocations across
-// generation attempts. Returned slices may have any capacity; generation grows
-// them as needed and returns the updated buffers. Pools used with parallel
-// workers must be safe for concurrent access. The core ships with NoPool.
-// The barkov/interned subpackage provides a sync.Pool-backed implementation.
+// SlicePool reuses slices across attempts. Slices may have any capacity and
+// come back grown. Pools used with parallel workers must be safe for
+// concurrent use. barkov/interned provides a sync.Pool-backed one.
 type SlicePool[T any] interface {
 	GetState() *[]T
 	PutState(*[]T)
@@ -34,28 +31,28 @@ func (NoPool[T]) PutState(*[]T)      {}
 func (NoPool[T]) GetGenerated() *[]T { s := make([]T, 0, 128); return &s }
 func (NoPool[T]) PutGenerated(*[]T)  {}
 
-// GenOption configures a generation call. All options are functional;
-// the unexported config struct keeps internals private.
+// GenOption configures a generation call.
 type GenOption[T comparable] func(*genConfig[T])
 
 type genConfig[T comparable] struct {
 	seed            []T
 	initialState    []T
 	validator       func([]T) bool
-	validatorWidth  int // 0 = default; WithNGramValidator requires a positive width
-	parallelism     int // 0 = single-threaded; >0 = goroutine count
+	validatorWidth  int
+	parallelism     int
 	stuckCache      StuckDetector
 	pool            SlicePool[T]
 	outputValidator func([]T) bool
 	maxTokens       int
-	noTokenLimit    bool
+	// Bools sit together so genConfig stays in the 128-byte size class
+	noTokenLimit      bool
+	hasValidatorWidth bool
 }
 
-// DefaultMaxTokens caps a walk's output when WithMaxTokens doesn't. A walk
-// that runs this long has almost always lost its way back to End.
+// DefaultMaxTokens caps walks that have lost their way back to End
 const DefaultMaxTokens = 1000
 
-// tokenLimit is the most tokens this call may emit, 0 for no limit.
+// tokenLimit is 0 for no limit
 func (c *genConfig[T]) tokenLimit() int {
 	switch {
 	case c.noTokenLimit:
@@ -66,52 +63,45 @@ func (c *genConfig[T]) tokenLimit() int {
 	return DefaultMaxTokens
 }
 
-// WithSeed prepends seed tokens to the generated sequence.
-// Padding with Sentinels.Begin happens automatically if seed is shorter
-// than chain.StateSize().
+func (c *genConfig[T]) windowWidth(stateSize int) int {
+	if c.hasValidatorWidth {
+		return c.validatorWidth
+	}
+	return stateSize + 2
+}
+
+// WithSeed emits seed before the generated tokens and starts the walk from it,
+// padded with Sentinels.Begin when shorter than StateSize.
 func WithSeed[T comparable](seed []T) GenOption[T] {
 	return func(c *genConfig[T]) { c.seed = seed }
 }
 
-// WithInitialState supplies the state used for the first transition, separately
-// from the emitted WithSeed tokens. The last StateSize tokens are used, padded
-// with Begin when shorter. A nil state keeps the normal seed-derived state.
-// Initial-state tokens are not emitted or counted against WithMaxTokens.
+// WithInitialState starts the walk from tokens instead of the seed, padded the
+// same way. Only the last StateSize tokens are used when tokens is longer. They
+// are not emitted or counted against WithMaxTokens, and nil keeps the seed.
 func WithInitialState[T comparable](tokens []T) GenOption[T] {
 	return func(c *genConfig[T]) { c.initialState = tokens }
 }
 
-// WithValidator installs an n-gram validator. The function is called
-// with the last StateSize+2 tokens after each step; returning false aborts
-// the current attempt with ErrSentenceFailedValidation.
-//
-// The window width is fixed at StateSize+2. Outputs shorter than that
-// are never passed to the validator; use WithOutputValidator to check
-// short or complete outputs.
+// WithValidator calls v with the last StateSize+2 tokens after each step and
+// fails the attempt with ErrSentenceFailedValidation when it returns false.
+// Shorter outputs are never checked; WithOutputValidator covers those.
 func WithValidator[T comparable](v func([]T) bool) GenOption[T] {
 	return func(c *genConfig[T]) {
 		c.validator = v
-		c.validatorWidth = 0
+		c.hasValidatorWidth = false
 	}
 }
 
-// WithOutputValidator installs a whole-output validator. It is called
-// exactly once with the complete output (seed tokens plus generated,
-// sentinels excluded, the same slice Gen would return); returning false
-// aborts the attempt with ErrSentenceFailedValidation. Unlike
-// WithValidator, this also covers outputs shorter than StateSize+2.
-//
-// An output validator makes generation non-streaming by definition: the
-// single-threaded path must buffer the entire output before it can call
-// v, then replays it through the iterator.
+// WithOutputValidator calls v once with the output Gen would return and fails
+// the attempt with ErrSentenceFailedValidation when it returns false. GenIter
+// then buffers the whole output before yielding any of it.
 func WithOutputValidator[T comparable](v func([]T) bool) GenOption[T] {
 	return func(c *genConfig[T]) { c.outputValidator = v }
 }
 
-// WithMaxTokens sets a maximum length (in non-sentinel tokens) for the
-// generated sequence, including any seed tokens. If generation reaches
-// this limit without hitting the End sentinel, the attempt is aborted
-// with ErrSentenceFailedValidation. 0 keeps DefaultMaxTokens.
+// WithMaxTokens fails an attempt that emits more than n tokens, seed included,
+// with ErrTokenLimit. 0 keeps DefaultMaxTokens.
 func WithMaxTokens[T comparable](n int) GenOption[T] {
 	return func(c *genConfig[T]) { c.maxTokens, c.noTokenLimit = n, false }
 }
@@ -122,43 +112,31 @@ func WithoutTokenLimit[T comparable]() GenOption[T] {
 	return func(c *genConfig[T]) { c.maxTokens, c.noTokenLimit = 0, true }
 }
 
-// WithNGramValidator installs a WindowValidator, a per-window validator
-// that knows its own width. Gen slides a window of exactly v.N() tokens
-// and calls v.Validate on it, eliminating the silent width mismatch that
-// WithValidator has when hand-wired to an NGramSet built with a
-// different n. T is inferred from v.
+// WithNGramValidator is WithValidator with a window of v.N() tokens, so an
+// NGramSet built for a different width than StateSize+2 still lines up.
 func WithNGramValidator[T comparable](v WindowValidator[T]) GenOption[T] {
 	return func(c *genConfig[T]) {
 		c.validator = v.Validate
-		c.validatorWidth = v.N()
-		if c.validatorWidth == 0 {
-			// Reserve zero for WithValidator's default; an explicit zero is invalid.
-			c.validatorWidth = -1
-		}
+		c.validatorWidth, c.hasValidatorWidth = v.N(), true
 	}
 }
 
-// WithThreaded fans the generation attempt out across runtime.NumCPU()*8
-// goroutines and returns the first successful result.
+// WithThreaded races runtime.NumCPU()*8 attempts and keeps the first success.
 func WithThreaded[T comparable]() GenOption[T] {
 	return func(c *genConfig[T]) { c.parallelism = runtime.NumCPU() * 8 }
 }
 
-// WithParallelism overrides the threaded fan-out width. n=1 is
-// equivalent to the unthreaded path. n=0 (the default) means single-threaded.
+// WithParallelism races n attempts. 0 and 1 run a single attempt.
 func WithParallelism[T comparable](n int) GenOption[T] {
 	return func(c *genConfig[T]) { c.parallelism = n }
 }
 
-// WithStuckDetector installs a stuck-state cache. Seeds that fail
-// repeatedly will short-circuit instead of being retried. Only effective
-// when used with WithThreaded or WithParallelism(>1).
+// WithStuckDetector lets threaded generation fail fast on seeds d calls stuck.
 func WithStuckDetector[T comparable](d StuckDetector) GenOption[T] {
 	return func(c *genConfig[T]) { c.stuckCache = d }
 }
 
-// WithSlicePool overrides the default slice allocation strategy for
-// the duration of this call.
+// WithSlicePool reuses p's slices for this call.
 func WithSlicePool[T comparable](p SlicePool[T]) GenOption[T] {
 	return func(c *genConfig[T]) { c.pool = p }
 }
@@ -170,7 +148,7 @@ func (c *genConfig[T]) validate() error {
 	if c.maxTokens < 0 {
 		return fmt.Errorf("barkov: maximum tokens must be nonnegative")
 	}
-	if c.validatorWidth < 0 {
+	if c.hasValidatorWidth && c.validatorWidth < 1 {
 		return fmt.Errorf("barkov: validator width must be positive")
 	}
 	return nil

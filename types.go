@@ -6,15 +6,9 @@ const BEGIN = "</BEGIN/>"
 const SEP = "</SEP/>"
 const END = "</END/>"
 
-// GenerativeChain is the minimum interface needed to generate text.
-// All methods are EXPORTED so users in other packages can implement
-// their own chain types. Move receives an immutable string it may retain.
-// Move must return promptly so cancellation and worker shutdown can finish.
-//
-// Gen computes the validator window as StateSize()+2 by default; that
-// policy is fixed here and not a knob on the interface. Use
-// WithNGramValidator to override the width per call with a
-// WindowValidator that knows its own N().
+// GenerativeChain is what Gen needs from a chain, so other packages can supply
+// their own. Move may retain its argument and must return promptly so
+// cancellation and worker shutdown can finish.
 type GenerativeChain[T comparable] interface {
 	StateSize() int
 	Sentinels() Sentinels[T]
@@ -22,20 +16,14 @@ type GenerativeChain[T comparable] interface {
 	Move(state string) (T, error)
 }
 
-// FastMoverKey is an optional optimisation interface for chains with a
-// fixed pointer-free state key K (typically [N]T for N ∈ 1..8). When Gen
-// detects it, it skips encoder.Encode + Move(string) and calls MoveKey
-// directly with the array-shaped key, eliminating one string allocation
-// per generated token. genIterSingle dispatches on chain.StateSize() and
-// asserts to FastMoverKey[[N]T, T] to pick the matching implementation.
+// FastMoverKey lets Gen pass the state window as K = [StateSize]T, for state
+// sizes 1 to 8, skipping the encoder and a string allocation per token.
 type FastMoverKey[K, T comparable] interface {
 	MoveKey(key K) (T, error)
 }
 
-// RNGSettable is implemented by chain types whose random source can be
-// overridden for deterministic tests and benchmarks. CompressedChain and
-// the interned package's indexed chains satisfy it; assert for it when you
-// hold a chain as a GenerativeChain interface:
+// RNGSettable chains, such as CompressedChain and the interned package's,
+// take a seeded random source for deterministic tests and benchmarks:
 //
 //	if s, ok := chain.(barkov.RNGSettable); ok {
 //		s.SetRNG(rand.New(rand.NewPCG(1, 2)))
@@ -48,26 +36,23 @@ func (e errorCause) Error() string {
 	return string(e)
 }
 
-// ErrInsufficientSupport means a context exists but fails the configured
-// observation threshold. It is distinct from a genuinely missing state.
+// ErrInsufficientSupport means a context exists but has too few observations
 const ErrInsufficientSupport = errorCause("insufficient context observations")
 
 const ErrStateNotFound = errorCause("state does not exist in model")
 const ErrSentenceTooShort = errorCause("generated sentence too short")
 const ErrSentenceFailedValidation = errorCause("sentence failed validation")
 
-// ErrTokenLimit means an attempt ran past WithMaxTokens before it ended. It
-// is wrapped together with ErrSentenceFailedValidation, so callers can test
-// for either.
-const ErrTokenLimit = errorCause("output exceeded maximum tokens")
+// Rejected attempts wrap one of these together with
+// ErrSentenceFailedValidation, so callers can test for either
+const (
+	// ErrTokenLimit means an attempt ran past WithMaxTokens before it ended
+	ErrTokenLimit = errorCause("output exceeded maximum tokens")
+	// ErrCopiesCorpus means an attempt reproduced training text it was told to avoid
+	ErrCopiesCorpus = errorCause("output copies the corpus")
+	// ErrWalkCycle means a walk kept repeating the same few tokens, as copy
+	// steering can force when every way out of a loop is filtered
+	ErrWalkCycle = errorCause("walk repeats a cycle")
+)
 
-// ErrCopiesCorpus means an attempt reproduced training text the generator was
-// told to avoid. Like ErrTokenLimit, it comes wrapped with
-// ErrSentenceFailedValidation.
-const ErrCopiesCorpus = errorCause("output copies the corpus")
-
-// ErrWalkCycle means a walk kept repeating the same few tokens, as copy
-// steering can force where every way out of a loop was filtered. It comes
-// wrapped with ErrSentenceFailedValidation, so callers retry it.
-const ErrWalkCycle = errorCause("walk repeats a cycle")
 const ErrGenerationTimeout = errorCause("sentence generation timed out")
