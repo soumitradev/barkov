@@ -59,13 +59,20 @@ const (
 	loadFactorDen = 5
 )
 
-// newStateMap returns a stateMap that holds sizeHint entries without growing
-func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
+// stateMapCapacity is the smallest table size that holds sizeHint entries
+// without growing
+func stateMapCapacity(sizeHint int) int {
 	minCap := (sizeHint*loadFactorDen + loadFactorNum - 1) / loadFactorNum
 	capacity := 16
 	for capacity <= minCap {
 		capacity <<= 1
 	}
+	return capacity
+}
+
+// newStateMap returns a stateMap that holds sizeHint entries without growing
+func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
+	capacity := stateMapCapacity(sizeHint)
 	m := &stateMap[K, V]{
 		entries: make([]stateEntry[K, V], capacity),
 		mask:    uint32(capacity - 1),

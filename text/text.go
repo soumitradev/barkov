@@ -147,13 +147,6 @@ func (g *Generator) States(order int) iter.Seq2[[]string, uint32] {
 
 func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiVerbatim, bidirectional bool) (chain, revChain interned.BackoffChain, messages *interned.MessageSet) {
 	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		chain = interned.BuildBackoff(cfg, encoded)
-	}()
-
 	if antiVerbatim {
 		wg.Add(1)
 		go func() {
@@ -162,19 +155,20 @@ func buildModels(encoded [][]interned.TokenID, cfg interned.BackoffConfig, antiV
 		}()
 	}
 
+	// Build forward and reverse sequentially so only one direction's build
+	// scratch buffers are live at a time.
+	chain = interned.BuildBackoff(cfg, encoded)
+
 	if bidirectional {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			reversedEncoded := make([][]interned.TokenID, len(encoded))
-			for i, msg := range encoded {
-				rev := make([]interned.TokenID, len(msg))
-				copy(rev, msg)
-				slices.Reverse(rev)
-				reversedEncoded[i] = rev
-			}
-			revChain = interned.BuildBackoff(cfg, reversedEncoded)
-		}()
+		reversedEncoded := make([][]interned.TokenID, len(encoded))
+		for i, msg := range encoded {
+			rev := make([]interned.TokenID, len(msg))
+			copy(rev, msg)
+			slices.Reverse(rev)
+			reversedEncoded[i] = rev
+		}
+		revChain = interned.BuildBackoff(cfg, reversedEncoded)
+		reversedEncoded = nil
 	}
 
 	wg.Wait()

@@ -1,9 +1,6 @@
 package interned
 
-import (
-	"fmt"
-	"sync"
-)
+import "fmt"
 
 // BuildBackoff constructs a variable-order chain from a pre-interned
 // corpus. Each step uses the longest context (up to cfg.MaxOrder) with at
@@ -19,15 +16,15 @@ func BuildBackoff(cfg BackoffConfig, corpus [][]TokenID) BackoffChain {
 	return wrapBackoff(buildBackoffCore(cfg, corpus))
 }
 
-// buildBackoffCore builds the per-order tables concurrently, since each is
-// an independent pass over the read-only corpus
+// buildBackoffCore builds the per-order tables one at a time, largest
+// first. Each table is compacted as it finishes, so peak memory stays near
+// the final model instead of holding every uncompacted table and its
+// scratch buffers at once.
 func buildBackoffCore(cfg BackoffConfig, corpus [][]TokenID) *backoffCore {
 	tables := make([]orderTable, cfg.MaxOrder)
-	var wg sync.WaitGroup
-	for m := 1; m <= cfg.MaxOrder; m++ {
-		wg.Go(func() { tables[m-1] = buildOrderTable(m, corpus) })
+	for m := cfg.MaxOrder; m >= 1; m-- {
+		tables[m-1] = buildOrderTable(m, corpus)
 	}
-	wg.Wait()
 	var contexts *contextIndex
 	if cfg.MinOrder > 1 {
 		contexts = newContextIndex(tables[cfg.MinOrder-1], cfg.MinOrder, cfg.MinSupport)

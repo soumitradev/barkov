@@ -133,6 +133,13 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		*val, sortBuf = cc.finalizeGroup(head[val.Offset-1], next, pendingTok, sortBuf)
 	})
 	cc.Model = stateIdx
+	// Drop build scratch buffers before compacting so peak memory stays bounded.
+	pendingState = nil
+	pendingTok = nil
+	head = nil
+	next = nil
+	sortBuf = nil
+	cc.compact()
 	return cc
 }
 
