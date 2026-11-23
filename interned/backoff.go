@@ -29,6 +29,9 @@ type BackoffChain interface {
 	WithEscape(scale float64) BackoffChain
 	// Options explains one step of the walk after window.
 	Options(window []TokenID) ([]OrderOptions, int)
+	// WithObserver returns a view sharing the same tables that reports live
+	// step decisions to fn (nil disables observation).
+	WithObserver(fn StepObserver) BackoffChain
 }
 
 // contextKey holds up to 8 context tokens right-aligned, so the order-m
@@ -99,7 +102,8 @@ type backoffCore struct {
 	sentinels barkov.Sentinels[TokenID]
 	encoder   PackedEncoder
 	contexts  *contextIndex
-	escape    float64 // 0 means the longest supported context always wins
+	escape    float64      // 0 means the longest supported context always wins
+	observer  StepObserver // nil keeps the walk free of observation work
 }
 
 func (b *backoffCore) States(order int) iter.Seq2[[]TokenID, uint32] {
@@ -133,18 +137,34 @@ func (b *backoffCore) moveTail(window []TokenID) (TokenID, error) {
 		return b.moveEscape(key, sv)
 	}
 	failure := noContext
+	var lookups []LookupRecord
+	if b.observer != nil {
+		lookups = make([]LookupRecord, 0, b.cfg.MaxOrder-b.cfg.MinOrder+1)
+	}
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
 		idx, ok := b.tables[m-1].lookup(key)
 		if !ok {
+			if b.observer != nil {
+				lookups = append(lookups, LookupRecord{Order: m, Status: LookupNoCorpusMatch})
+			}
 			continue
 		}
 		failure = max(failure, thinContext)
 		if idx.Obs < uint32(b.cfg.MinSupport) {
+			if b.observer != nil {
+				lookups = append(lookups, LookupRecord{Order: m, Status: LookupBelowMinSupport, SeenCount: idx.Obs})
+			}
 			continue
 		}
 		failure = allSteered
 		if tok, ok := b.sample(m, idx, key, sv); ok {
+			if b.observer != nil {
+				b.observeStep(key, m, idx.Obs, tok, lookups)
+			}
 			return tok, nil
+		}
+		if b.observer != nil {
+			lookups = append(lookups, LookupRecord{Order: m, Status: LookupAllOptionsCopyBlocked, SeenCount: idx.Obs})
 		}
 	}
 	return 0, b.noContinuationErr(failure)
