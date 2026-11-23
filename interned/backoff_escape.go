@@ -13,7 +13,7 @@ func (b *backoffCore) WithEscape(scale float64) BackoffChain {
 // weight times the share of followers steering allows, then a follower from
 // its filtered distribution. Renormalising each order alone would skew the
 // mixture, e.g. an order left with only END would give END all its weight.
-func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]TokenID) (TokenID, error) {
+func (b *backoffCore) moveEscape(key contextKey, sv steerView) (TokenID, error) {
 	type component struct {
 		m      int
 		idx    barkov.ChoicesIndex
@@ -24,13 +24,12 @@ func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]To
 	failure := noContext
 	stay := 1.0 // probability that escaping reaches the current order
 	for m := b.cfg.MaxOrder; m >= b.cfg.MinOrder; m-- {
-		tail := window[len(window)-m:]
 		// A context opening with two Begins repeats the shorter message-start
 		// context, so skip it to count start padding once
-		if m > b.cfg.MinOrder && tail[0] == b.sentinels.Begin && tail[1] == b.sentinels.Begin {
+		if m > b.cfg.MinOrder && key[len(key)-m] == b.sentinels.Begin && key[len(key)-m+1] == b.sentinels.Begin {
 			continue
 		}
-		idx, ok := b.tables[m-1].lookupTail(tail)
+		idx, ok := b.tables[m-1].lookup(key)
 		if !ok {
 			continue
 		}
@@ -52,14 +51,14 @@ func (b *backoffCore) moveEscape(window []TokenID, sv steerView, probeBuf *[8]To
 	}
 	var total float64
 	for i := range n {
-		comps[i].weight *= b.allowedShare(comps[i].m, comps[i].idx, window, sv, probeBuf)
+		comps[i].weight *= b.allowedShare(comps[i].m, comps[i].idx, key, sv)
 		total += comps[i].weight
 	}
 	if total > 0 {
 		pick := b.float64() * total
 		for i := range n {
 			if pick -= comps[i].weight; pick < 0 || i == n-1 {
-				if tok, ok := b.sample(comps[i].m, comps[i].idx, window, sv, probeBuf); ok {
+				if tok, ok := b.sample(comps[i].m, comps[i].idx, key, sv); ok {
 					return tok, nil
 				}
 			}
@@ -81,12 +80,12 @@ func (b *backoffCore) escapeProbability(m int, idx barkov.ChoicesIndex) float64 
 }
 
 // allowedShare is the share of the order-m state's observations steering allows
-func (b *backoffCore) allowedShare(m int, idx barkov.ChoicesIndex, window []TokenID, sv steerView, probeBuf *[8]TokenID) float64 {
+func (b *backoffCore) allowedShare(m int, idx barkov.ChoicesIndex, key contextKey, sv steerView) float64 {
 	if sv.mode == steerOff {
 		return 1
 	}
 	if idx.Count == 1 {
-		if b.filtered(sv, window, TokenID(idx.Offset), probeBuf) {
+		if b.filtered(sv, key, TokenID(idx.Offset)) {
 			return 0
 		}
 		return 1
@@ -94,7 +93,7 @@ func (b *backoffCore) allowedShare(m int, idx barkov.ChoicesIndex, window []Toke
 	choices, cum := b.tables[m-1].slices(idx)
 	var allowed, prev uint32
 	for i, tok := range choices {
-		if !b.filtered(sv, window, tok, probeBuf) {
+		if !b.filtered(sv, key, tok) {
 			allowed += cum[i] - prev
 		}
 		prev = cum[i]

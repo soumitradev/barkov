@@ -12,17 +12,17 @@ func (b *backoffCore) CopiesRun(tokens []TokenID) bool {
 		return false
 	}
 	for i := 0; i+r <= len(tokens); i++ {
-		if _, ok := b.tables[r-1].lookupTail(tokens[i : i+r]); ok {
+		if _, ok := b.tables[r-1].lookup(keyOf(tokens[i : i+r])); ok {
 			return true
 		}
 	}
 	return false
 }
 
-// runLongEnough reports whether the window's last MaxVerbatim-1 tokens are
+// runLongEnough reports whether the context's last MaxVerbatim-1 tokens are
 // all real, since only then can a candidate complete a verbatim run
-func (b *backoffCore) runLongEnough(window []TokenID) bool {
-	for _, tok := range window[len(window)-(b.cfg.MaxVerbatim-1):] {
+func (b *backoffCore) runLongEnough(key contextKey) bool {
+	for _, tok := range key[len(key)-(b.cfg.MaxVerbatim-1):] {
 		if tok == b.sentinels.Begin {
 			return false
 		}
@@ -39,7 +39,7 @@ const (
 	steerBig                     // large follower set, probed per candidate
 )
 
-// steerView holds the followers of the window's last MaxVerbatim-1 tokens.
+// steerView holds the followers of the context's last MaxVerbatim-1 tokens.
 // Those are exactly the tokens that would complete a corpus MaxVerbatim-gram,
 // so one lookup per step replaces a table probe per candidate.
 type steerView struct {
@@ -52,9 +52,9 @@ type steerView struct {
 // every steering state on prose has one follower.
 const steerProbeFallback = 16
 
-func (b *backoffCore) steerSnapshot(window []TokenID) steerView {
+func (b *backoffCore) steerSnapshot(key contextKey) steerView {
 	r := b.cfg.MaxVerbatim
-	idx, ok := b.tables[r-2].lookupTail(window[len(window)-(r-1):])
+	idx, ok := b.tables[r-2].lookup(key)
 	if !ok {
 		return steerView{}
 	}
@@ -68,9 +68,9 @@ func (b *backoffCore) steerSnapshot(window []TokenID) steerView {
 	return steerView{mode: steerSet, set: set}
 }
 
-// filtered reports whether emitting tok after window would complete a
+// filtered reports whether emitting tok after key would complete a
 // verbatim MaxVerbatim-gram
-func (b *backoffCore) filtered(sv steerView, window []TokenID, tok TokenID, probeBuf *[8]TokenID) bool {
+func (b *backoffCore) filtered(sv steerView, key contextKey, tok TokenID) bool {
 	// End never appears in an order-R key, but it does appear in follower
 	// sets, so it must be let through explicitly for sentences to end
 	if tok == b.sentinels.End {
@@ -87,16 +87,13 @@ func (b *backoffCore) filtered(sv steerView, window []TokenID, tok TokenID, prob
 		}
 		return false
 	case steerBig:
-		return b.wouldExtendVerbatim(window, tok, probeBuf)
+		return b.wouldExtendVerbatim(key, tok)
 	}
 	return false
 }
 
 // wouldExtendVerbatim probes the order-R table, whose keys are the R-grams inside messages
-func (b *backoffCore) wouldExtendVerbatim(window []TokenID, tok TokenID, probe *[8]TokenID) bool {
-	r := b.cfg.MaxVerbatim
-	copy(probe[:r-1], window[len(window)-(r-1):])
-	probe[r-1] = tok
-	_, exists := b.tables[r-1].lookupTail(probe[:r])
+func (b *backoffCore) wouldExtendVerbatim(key contextKey, tok TokenID) bool {
+	_, exists := b.tables[b.cfg.MaxVerbatim-1].lookup(key.shift(tok))
 	return exists
 }

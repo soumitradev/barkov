@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -365,5 +366,57 @@ func TestBackoffStatesIteration(t *testing.T) {
 	}
 	if emptyCount != 0 {
 		t.Errorf("expected 0 states for out-of-bounds orders, got %d", emptyCount)
+	}
+}
+
+// TestBackoffMoveKeyAllocs keeps each walk step allocation free under every
+// steering mode, since Gen pays any step allocation once per token
+func TestBackoffMoveKeyAllocs(t *testing.T) {
+	steered := BackoffConfig{MaxOrder: 3, MaxVerbatim: 3}
+	// Every corpus walks from [p a b], whose order-2 context [a b] sets the
+	// steering mode, and order 1 offers "d" as the follower steering allows
+	single := [][]string{{"p", "a", "b", "c"}, {"q", "z", "b", "d"}}
+	set := append([][]string{{"r", "a", "b", "e"}}, single...)
+	big := [][]string{{"p", "y"}, {"q", "z", "b", "d"}}
+	for i := range steerProbeFallback + 1 {
+		big = append(big, []string{"a", "b", fmt.Sprint("x", i)})
+	}
+
+	// Without "q z b d" no order offers a follower steering allows
+	deadEnd := single[:1]
+
+	cases := []struct {
+		name    string
+		corpus  [][]string
+		cfg     BackoffConfig
+		escape  float64
+		mode    steerMode
+		wantErr error
+	}{
+		{"plain", set, BackoffConfig{MaxOrder: 3, MaxVerbatim: -1}, 0, steerOff, nil},
+		{"single", single, steered, 0, steerSingle, nil},
+		{"set", set, steered, 0, steerSet, nil},
+		{"big", big, steered, 0, steerBig, nil},
+		{"escape", set, steered, 1, steerSet, nil},
+		{"escape big", big, steered, 1, steerBig, nil},
+		{"dead end", deadEnd, steered, 0, steerSingle, barkov.ErrSentenceFailedValidation},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vocab := NewVocabulary()
+			chain := BuildBackoff(tc.cfg, vocab.InternCorpus(tc.corpus)).WithEscape(tc.escape).(*backoffChain3)
+			key := [3]TokenID{mustLookup(t, vocab, "p"), mustLookup(t, vocab, "a"), mustLookup(t, vocab, "b")}
+			if tc.mode != steerOff {
+				if mode := chain.steerSnapshot(keyOf(key[:])).mode; mode != tc.mode {
+					t.Fatalf("corpus gives steering mode %d, want %d", mode, tc.mode)
+				}
+			}
+			if _, err := chain.MoveKey(key); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("MoveKey error = %v, want %v", err, tc.wantErr)
+			}
+			if allocs := testing.AllocsPerRun(100, func() { chain.MoveKey(key) }); allocs != 0 {
+				t.Errorf("MoveKey allocates %v times per step, want 0", allocs)
+			}
+		})
 	}
 }
