@@ -90,15 +90,20 @@ const (
 	loadFactorDen = 5
 )
 
-// newStateMap returns a stateMap sized so that `sizeHint` entries
-// fit under the load-factor threshold without a resize.
-func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
+func stateMapCapacity(sizeHint int) int {
 	// Need capacity such that sizeHint < capacity*loadFactorNum/loadFactorDen.
 	minCap := (sizeHint*loadFactorDen + loadFactorNum - 1) / loadFactorNum
 	capacity := 16
 	for capacity <= minCap {
 		capacity <<= 1
 	}
+	return capacity
+}
+
+// newStateMap returns a stateMap sized so that `sizeHint` entries
+// fit under the load-factor threshold without a resize.
+func newStateMap[K comparable, V comparable](sizeHint int) *stateMap[K, V] {
+	capacity := stateMapCapacity(sizeHint)
 	m := &stateMap[K, V]{
 		entries: make([]stateEntry[K, V], capacity),
 		mask:    uint32(capacity - 1),

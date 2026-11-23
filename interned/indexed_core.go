@@ -258,6 +258,13 @@ func buildIndexedCore[K comparable](corpus [][]TokenID) *indexedCore[K] {
 		}
 	})
 	cc.Model = stateIdx
+	// Drop build scratch buffers before compacting so peak memory stays bounded.
+	pendingState = nil
+	pendingTok = nil
+	head = nil
+	next = nil
+	sortBuf = nil
+	cc.compact()
 	return cc
 }
 

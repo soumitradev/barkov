@@ -5,7 +5,6 @@ import (
 	"iter"
 	"math/rand/v2"
 	"sort"
-	"sync"
 	"unsafe"
 
 	barkov "github.com/soumitradev/barkov/v2"
@@ -591,21 +590,14 @@ func scanCumDist(cum []uint32, choiceNum uint32) int {
 }
 
 // buildBackoffCore builds one indexedCore per order 1..MaxOrder, one
-// corpus pass each. The per-order builds are independent (corpus is
-// read-only, each goroutine writes its own table slot), so they run
-// concurrently. A MaxOrder-6 build is six full passes, and wall time
-// drops to roughly the slowest single pass on multicore machines.
+// corpus pass each. Building orders sequentially largest-first and compacting
+// each table as it finishes keeps peak memory close to the final compacted
+// model instead of holding multiple uncompacted tables and scratch buffers at once.
 func buildBackoffCore(cfg BackoffConfig, corpus [][]TokenID) *backoffCore {
 	tables := make([]orderTable, cfg.MaxOrder)
-	var wg sync.WaitGroup
-	for m := 1; m <= cfg.MaxOrder; m++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			tables[m-1] = buildOrderTable(m, corpus)
-		}()
+	for m := cfg.MaxOrder; m >= 1; m-- {
+		tables[m-1] = buildOrderTable(m, corpus)
 	}
-	wg.Wait()
 	var contexts *contextIndex
 	if cfg.MinOrder > 1 {
 		contexts = newContextIndex(tables[cfg.MinOrder-1], cfg.MinOrder, cfg.MinSupport)

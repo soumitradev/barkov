@@ -223,7 +223,7 @@ func validateIndex(d *snapshotDecoder, idx barkov.ChoicesIndex, vocab uint32, we
 // while loading. Only unusually sparse training tables need compaction on save.
 // This format is coupled to stateMap.hash; change its version if the mixer changes.
 func compactSnapshotTable[K comparable](table *stateMap[K, barkov.ChoicesIndex]) *stateMap[K, barkov.ChoicesIndex] {
-	if len(table.entries) <= max(16, table.Len()*4) {
+	if len(table.entries) <= stateMapCapacity(table.Len()) {
 		return table
 	}
 	compact := newStateMap[K, barkov.ChoicesIndex](table.Len())
