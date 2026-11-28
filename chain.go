@@ -159,7 +159,7 @@ type ChoicesIndex struct {
 	Count  uint16
 }
 
-// CompressedChain uses a struct-of-arrays layout for cache efficiency
+// CompressedChain uses a struct-of-arrays layout for cache performance
 type CompressedChain[T comparable] struct {
 	Model     map[string]ChoicesIndex
 	Choices   []T
@@ -204,6 +204,14 @@ func (c *Chain[T]) Compress() *CompressedChain[T] {
 // Implements Transitioner[T]
 func (cc *CompressedChain[T]) StateSize() int          { return cc.stateSize }
 func (cc *CompressedChain[T]) Sentinels() Sentinels[T] { return cc.sentinels }
+func (cc *CompressedChain[T]) Pick(idx ChoicesIndex) T {
+	if idx.Count == 1 {
+		return cc.Choices[idx.Offset]
+	}
+	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
+	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
+	return choices[chooseToken32(cumDist)]
+}
 
 // Move transitions from a state to a randomly chosen next token
 func (cc *CompressedChain[T]) Move(state []T) (T, error) {
