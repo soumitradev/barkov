@@ -4,52 +4,49 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sort"
+	"strings"
 )
 
-// Compile-time check that Chain implements GenerativeChain.
-var _ GenerativeChain[string] = (*Chain[string])(nil)
+// Compile-time check that Chain implements Transitioner
+var _ Transitioner[string] = (*Chain[string])(nil)
 
-// Sentinels bundles the begin/end tokens for a given Token type.
-// Users choose values that won't collide with real tokens in their corpus.
+// Sentinels to signify begin or end
 type Sentinels[T comparable] struct {
 	Begin T
 	End   T
 }
 
-// ChainConfig holds the dependencies a Chain needs.
-// Required: StateSize, Sentinels, Encoder.
+// Config, for a chain (duh)
 type ChainConfig[T comparable] struct {
 	StateSize int
 	Sentinels Sentinels[T]
-	Encoder   StateEncoder[T]
+	// Key turns a state into a map key. It must give distinct keys to
+	// distinct states of length StateSize
+	Key func(state []T) string
 }
 
-// Chain is the generic markov chain type.
+// Chain is the generic markov chain type
 type Chain[T comparable] struct {
 	Model     map[string]map[T]uint32
 	stateSize int
 	sentinels Sentinels[T]
-	encoder   StateEncoder[T]
+	key       func(state []T) string
 
 	beginChoices []T
 	beginCumDist []uint32
 }
 
-// NewChain constructs a Chain from a config.
-// This is the generic entry point. For the common string case,
-// use InitChain(stateSize) which fills in defaults.
+// Make a chain with a config
 func NewChain[T comparable](cfg ChainConfig[T]) *Chain[T] {
 	return &Chain[T]{
 		Model:     make(map[string]map[T]uint32),
 		stateSize: cfg.StateSize,
 		sentinels: cfg.Sentinels,
-		encoder:   cfg.Encoder,
+		key:       cfg.Key,
 	}
 }
 
-// BuildRaw constructs the chain from a pre-encoded corpus. Unlike Build,
-// it does not convert from strings — the corpus is already in the target
-// token type T. This is the canonical, generic build path.
+// BuildRaw constructs the chain from a pre-encoded corpus
 func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 	beginSeq := make([]T, c.stateSize)
 	for i := range beginSeq {
@@ -71,7 +68,7 @@ func (c *Chain[T]) BuildRaw(corpus [][]T) *Chain[T] {
 		items = append(items, c.sentinels.End)
 
 		for i := 0; i < len(run)+1; i++ {
-			state := c.encoder.Encode(items[i : i+c.stateSize])
+			state := c.key(items[i : i+c.stateSize])
 			follow := items[i+c.stateSize]
 
 			if _, ok := c.Model[state]; !ok {
@@ -90,45 +87,51 @@ func (c *Chain[T]) precomputeBeginState() {
 	for i := range beginSeq {
 		beginSeq[i] = c.sentinels.Begin
 	}
-	key := c.encoder.Encode(beginSeq)
+	key := c.key(beginSeq)
 	if choices, ok := c.Model[key]; ok {
 		c.beginChoices, c.beginCumDist = calculateCumDist(choices)
 	}
 }
 
-// Implements GenerativeChain[T].
-func (c *Chain[T]) StateSize() int           { return c.stateSize }
-func (c *Chain[T]) MaxOverlap() int          { return c.stateSize + 2 }
+// Implements Transitioner[T]
+func (c *Chain[T]) StateSize() int          { return c.stateSize }
 func (c *Chain[T]) Sentinels() Sentinels[T] { return c.sentinels }
-func (c *Chain[T]) Encoder() StateEncoder[T] { return c.encoder }
 
-// Move transitions from a state to a randomly chosen next token.
-// Returns ErrStateNotFound (wrapped with the state) if the state doesn't exist.
-func (c *Chain[T]) Move(state string) (T, error) {
-	choices, ok := c.Model[state]
-	if !ok {
+// Move transitions from a state to the chosen next token
+// Returns ErrStateNotFound (wrapped with the state) if the state doesn't exist
+func (c *Chain[T]) Move(state []T) (T, error) {
+	keys, cumDist, err := c.distribution(state)
+	if err != nil {
 		var zero T
-		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
+		return zero, err
 	}
-
-	// Fast-path for the begin state: reuse precomputed distributions.
-	beginSeq := make([]T, c.stateSize)
-	for i := range beginSeq {
-		beginSeq[i] = c.sentinels.Begin
-	}
-	if state == c.encoder.Encode(beginSeq) && len(c.beginChoices) > 0 {
-		return c.beginChoices[chooseToken32(c.beginCumDist)], nil
-	}
-
-	keys, cumDist := calculateCumDist(choices)
 	return keys[chooseToken32(cumDist)], nil
 }
 
-// MoveTokens is a convenience wrapper that encodes the state for the caller.
-// Equivalent to c.Move(c.Encoder().Encode(tokens)) but saves boilerplate.
-// Not part of the GenerativeChain[T] interface.
-func (c *Chain[T]) MoveTokens(tokens []T) (T, error) {
-	return c.Move(c.encoder.Encode(tokens))
+// distribution returns the transition distribution P(next | state)
+// The begin state is cached
+func (c *Chain[T]) distribution(state []T) ([]T, []uint32, error) {
+	if c.isBeginState(state) && len(c.beginChoices) > 0 {
+		return c.beginChoices, c.beginCumDist, nil
+	}
+	choices, ok := c.Model[c.key(state)]
+	if !ok {
+		return nil, nil, fmt.Errorf("barkov: state %v not in model: %w", state, ErrStateNotFound)
+	}
+	keys, cumDist := calculateCumDist(choices)
+	return keys, cumDist, nil
+}
+
+func (c *Chain[T]) isBeginState(state []T) bool {
+	if len(state) != c.stateSize {
+		return false
+	}
+	for _, tok := range state {
+		if tok != c.sentinels.Begin {
+			return false
+		}
+	}
+	return true
 }
 
 func calculateCumDist[T comparable](next map[T]uint32) ([]T, []uint32) {
@@ -150,26 +153,26 @@ func chooseToken32(cumDist []uint32) int {
 	})
 }
 
-// ChoicesIndex points into the flat Choices/CumDist arrays.
+// ChoicesIndex points into the flat Choices/CumDist arrays
 type ChoicesIndex struct {
 	Offset uint32
 	Count  uint16
 }
 
-// CompressedChain uses a struct-of-arrays layout for cache efficiency.
+// CompressedChain uses a struct-of-arrays layout for cache efficiency
 type CompressedChain[T comparable] struct {
 	Model     map[string]ChoicesIndex
 	Choices   []T
 	CumDist   []uint32
 	stateSize int
 	sentinels Sentinels[T]
-	encoder   StateEncoder[T]
+	key       func(state []T) string
 }
 
-// Compile-time check that CompressedChain implements GenerativeChain.
-var _ GenerativeChain[string] = (*CompressedChain[string])(nil)
+// Compile-time check that CompressedChain implements Transitioner
+var _ Transitioner[string] = (*CompressedChain[string])(nil)
 
-// Compress converts the chain to SoA layout for better cache performance.
+// Compress converts the chain to SoA layout for better cache performance
 func (c *Chain[T]) Compress() *CompressedChain[T] {
 	totalEntries := 0
 	for _, choices := range c.Model {
@@ -179,7 +182,7 @@ func (c *Chain[T]) Compress() *CompressedChain[T] {
 	cc := &CompressedChain[T]{
 		stateSize: c.stateSize,
 		sentinels: c.sentinels,
-		encoder:   c.encoder,
+		key:       c.key,
 		Model:     make(map[string]ChoicesIndex, len(c.Model)),
 		Choices:   make([]T, 0, totalEntries),
 		CumDist:   make([]uint32, 0, totalEntries),
@@ -198,41 +201,39 @@ func (c *Chain[T]) Compress() *CompressedChain[T] {
 	return cc
 }
 
-// Implements GenerativeChain[T].
-func (cc *CompressedChain[T]) StateSize() int           { return cc.stateSize }
-func (cc *CompressedChain[T]) MaxOverlap() int          { return cc.stateSize + 2 }
-func (cc *CompressedChain[T]) Sentinels() Sentinels[T]  { return cc.sentinels }
-func (cc *CompressedChain[T]) Encoder() StateEncoder[T] { return cc.encoder }
+// Implements Transitioner[T]
+func (cc *CompressedChain[T]) StateSize() int          { return cc.stateSize }
+func (cc *CompressedChain[T]) Sentinels() Sentinels[T] { return cc.sentinels }
 
-// Move transitions from a state to a randomly chosen next token.
-func (cc *CompressedChain[T]) Move(state string) (T, error) {
-	idx, ok := cc.Model[state]
+// Move transitions from a state to a randomly chosen next token
+func (cc *CompressedChain[T]) Move(state []T) (T, error) {
+	idx, ok := cc.Model[cc.key(state)]
 	if !ok {
 		var zero T
-		return zero, fmt.Errorf("barkov: state %q not in model: %w", state, ErrStateNotFound)
+		return zero, fmt.Errorf("barkov: state %v not in model: %w", state, ErrStateNotFound)
 	}
 	cumDist := cc.CumDist[idx.Offset : idx.Offset+uint32(idx.Count)]
 	choices := cc.Choices[idx.Offset : idx.Offset+uint32(idx.Count)]
 	return choices[chooseToken32(cumDist)], nil
 }
 
-// MoveTokens is a convenience wrapper that encodes the state for the caller.
-func (cc *CompressedChain[T]) MoveTokens(tokens []T) (T, error) {
-	return cc.Move(cc.encoder.Encode(tokens))
-}
-
-// InitChain is the zero-configuration constructor for string chains.
-// This is the common entry point for most users.
+// InitChain is syntax sugar for a default string chain
 func InitChain(stateSize int) *Chain[string] {
 	return NewChain(ChainConfig[string]{
 		StateSize: stateSize,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	})
 }
 
-// Build constructs the chain from a corpus. This is a convenience wrapper
-// around BuildRaw for backwards compatibility with the original API.
+// joinKey is the default key for string chains. Tokens must not contain SEP,
+// or two states can share a key
+func joinKey(state []string) string {
+	return strings.Join(state, SEP)
+}
+
+// Build constructs the chain from a corpus
+// This is a convenience wrapper around BuildRaw for backwards compatibility with the original API
 func (c *Chain[T]) Build(corpus [][]T) *Chain[T] {
 	return c.BuildRaw(corpus)
 }

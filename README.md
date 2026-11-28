@@ -11,7 +11,7 @@ go get github.com/soumitradev/barkov/v2
 ```
 
 ## Why?
-The reason I made this library is because the markovify library was quite slow, and it did not give me enough control over the tokenization or the validation parts of the markov chain without me having to override the existing classes, which I found very annoying. For this reason, this implementation is quite barebones, and does not come with tokenization or validation code. You can choose to tokenize your text however you want, and validate a sentence in whichever way you see fit. If you don't want to use the chain struct that I've defined, and want to use your own, fine. There's a `GenerativeChain` interface you need to satisfy that has 3 exported methods, and you can use the most useful parts of this library.
+The reason I made this library is because the markovify library was quite slow, and it did not give me enough control over the tokenization or the validation parts of the markov chain without me having to override the existing classes, which I found very annoying. For this reason, this implementation is quite barebones, and does not come with tokenization or validation code. You can choose to tokenize your text however you want, and validate a sentence in whichever way you see fit. If you don't want to use the chain struct that I've defined, and want to use your own, fine. There's a `Transitioner` interface you need to satisfy that has 3 exported methods, and you can use the most useful parts of this library.
 
 Some advantages of this library over the original (in no particular order):
 - Much more memory efficient by default (doesn't store too many state variables, relies more on barebones maps and slices)

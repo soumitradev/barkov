@@ -4,15 +4,10 @@ const BEGIN = "</BEGIN/>"
 const SEP = "</SEP/>"
 const END = "</END/>"
 
-// GenerativeChain is the minimum interface needed to generate text.
-// All methods are EXPORTED so users in other packages can implement
-// their own chain types.
-type GenerativeChain[T comparable] interface {
+type Transitioner[T comparable] interface {
 	StateSize() int
-	MaxOverlap() int
 	Sentinels() Sentinels[T]
-	Encoder() StateEncoder[T]
-	Move(state string) (T, error)
+	Move(state []T) (T, error)
 }
 
 type errorCause string

@@ -11,7 +11,7 @@ func TestGenSingleThreaded(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{
@@ -41,7 +41,7 @@ func TestGenWithSeed(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{
@@ -55,7 +55,7 @@ func TestGenWithSeed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should be ["a", "b", "c"] - seed is yielded then "c" follows
+	// Should be ["a", "b", "c"] because first seed is yielded then "c" follows
 	if len(result) < 3 {
 		t.Fatalf("expected at least 3 tokens, got %d: %v", len(result), result)
 	}
@@ -68,7 +68,7 @@ func TestGenWithValidator(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{
@@ -100,7 +100,7 @@ func TestGenContextCancellation(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{
@@ -125,7 +125,7 @@ func TestGenIterEarlyBreak(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{
@@ -155,7 +155,7 @@ func TestGenThreaded(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{
@@ -168,7 +168,7 @@ func TestGenThreaded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := Gen(ctx, chain, WithThreaded[string]())
+	result, err := Gen(ctx, chain, WithParallelism[string](4))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestGenStateNotFound(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	// Empty corpus
@@ -202,7 +202,7 @@ func TestGenWithIntTokens(t *testing.T) {
 	cfg := ChainConfig[int]{
 		StateSize: 2,
 		Sentinels: Sentinels[int]{Begin: -1, End: -2},
-		Encoder:   intEncoder{},
+		Key:       intKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]int{
@@ -224,5 +224,25 @@ func TestGenWithIntTokens(t *testing.T) {
 	// First token should be 1 (only option after [-1, -1])
 	if result[0] != 1 {
 		t.Errorf("expected first token 1, got %d", result[0])
+	}
+}
+
+func TestGenWithAcceptingValidator(t *testing.T) {
+	cfg := ChainConfig[int]{
+		StateSize: 2,
+		Sentinels: Sentinels[int]{Begin: -1, End: -2},
+		Key:       intKey,
+	}
+	chain := NewChain(cfg)
+	corpus := [][]int{
+		{1, 2, 3},
+		{1, 2, 4},
+	}
+	chain.BuildRaw(corpus)
+
+	ctx := context.Background()
+	out, err := Gen(ctx, chain, WithValidator(func([]int) bool { return true }))
+	if err != nil || len(out) == 0 {
+		t.Fatalf("got %v, %v; want a sentence", out, err)
 	}
 }

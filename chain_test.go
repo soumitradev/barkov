@@ -3,6 +3,7 @@ package barkov
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ func TestChainBuildRaw(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 
@@ -21,7 +22,7 @@ func TestChainBuildRaw(t *testing.T) {
 	chain.BuildRaw(corpus)
 
 	// Verify model has expected states
-	beginState := SepEncoder{Sep: SEP}.Encode([]string{BEGIN, BEGIN})
+	beginState := joinKey([]string{BEGIN, BEGIN})
 	if _, ok := chain.Model[beginState]; !ok {
 		t.Errorf("expected begin state %q in model", beginState)
 	}
@@ -32,7 +33,7 @@ func TestChainBuildRaw(t *testing.T) {
 	}
 
 	// "the quick" should lead to "brown"
-	theQuickState := SepEncoder{Sep: SEP}.Encode([]string{"the", "quick"})
+	theQuickState := joinKey([]string{"the", "quick"})
 	if chain.Model[theQuickState]["brown"] != 1 {
 		t.Errorf("expected 'brown' after 'the quick'")
 	}
@@ -42,14 +43,14 @@ func TestChainMove(t *testing.T) {
 	cfg := ChainConfig[string]{
 		StateSize: 2,
 		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
+		Key:       joinKey,
 	}
 	chain := NewChain(cfg)
 	corpus := [][]string{{"a", "b", "c"}}
 	chain.BuildRaw(corpus)
 
 	// Valid state should return a token
-	state := SepEncoder{Sep: SEP}.Encode([]string{"a", "b"})
+	state := []string{"a", "b"}
 	tok, err := chain.Move(state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -59,7 +60,7 @@ func TestChainMove(t *testing.T) {
 	}
 
 	// Invalid state should return wrapped ErrStateNotFound
-	_, err = chain.Move("nonexistent")
+	_, err = chain.Move([]string{"nonexistent"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent state")
 	}
@@ -67,28 +68,8 @@ func TestChainMove(t *testing.T) {
 		t.Errorf("expected ErrStateNotFound, got %v", err)
 	}
 	// Error message should contain the state
-	if !containsString(err.Error(), "nonexistent") {
+	if !strings.Contains(err.Error(), "nonexistent") {
 		t.Errorf("error message should contain the state, got: %s", err.Error())
-	}
-}
-
-func TestChainMoveTokens(t *testing.T) {
-	cfg := ChainConfig[string]{
-		StateSize: 2,
-		Sentinels: Sentinels[string]{Begin: BEGIN, End: END},
-		Encoder:   SepEncoder{Sep: SEP},
-	}
-	chain := NewChain(cfg)
-	corpus := [][]string{{"a", "b", "c"}}
-	chain.BuildRaw(corpus)
-
-	// MoveTokens should be equivalent to Move(Encode(...))
-	tok, err := chain.MoveTokens([]string{"a", "b"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if tok != "c" {
-		t.Errorf("expected 'c', got %q", tok)
 	}
 }
 
@@ -97,7 +78,7 @@ func TestChainWithIntTokens(t *testing.T) {
 	cfg := ChainConfig[int]{
 		StateSize: 2,
 		Sentinels: Sentinels[int]{Begin: -1, End: -2},
-		Encoder:   intEncoder{},
+		Key:       intKey,
 	}
 	chain := NewChain(cfg)
 
@@ -113,55 +94,25 @@ func TestChainWithIntTokens(t *testing.T) {
 	}
 }
 
-// intEncoder implements StateEncoder[int] for testing
-type intEncoder struct{}
-
-func (intEncoder) Encode(tokens []int) string {
-	// Simple encoding: space-separated integers
-	if len(tokens) == 0 {
-		return ""
-	}
-	result := make([]byte, 0, len(tokens)*4)
-	for i, tok := range tokens {
-		if i > 0 {
-			result = append(result, ' ')
-		}
-		result = append(result, []byte(fmt.Sprintf("%d", tok))...)
-	}
-	return string(result)
+// intKey formats states like "[1 2]", which is distinct for distinct int slices
+func intKey(state []int) string {
+	return fmt.Sprint(state)
 }
 
-func (intEncoder) Decode(state string) []int {
-	if state == "" {
-		return nil
+func TestJoinKeyDistinguishesStates(t *testing.T) {
+	states := [][]string{
+		{"a", "b"},
+		{"ab", ""},
+		{"", "ab"},
+		{BEGIN, "a"},
+		{BEGIN, BEGIN},
 	}
-	var result []int
-	for _, part := range splitString(state, ' ') {
-		var n int
-		fmt.Sscanf(part, "%d", &n)
-		result = append(result, n)
-	}
-	return result
-}
-
-func containsString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+	seen := make(map[string][]string)
+	for _, state := range states {
+		key := joinKey(state)
+		if prev, ok := seen[key]; ok {
+			t.Errorf("%v and %v share key %q", prev, state, key)
 		}
+		seen[key] = state
 	}
-	return false
-}
-
-func splitString(s string, sep byte) []string {
-	var result []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == sep {
-			result = append(result, s[start:i])
-			start = i + 1
-		}
-	}
-	result = append(result, s[start:])
-	return result
 }

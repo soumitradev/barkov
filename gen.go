@@ -2,17 +2,18 @@ package barkov
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"sync"
 )
 
-// GenIter streams tokens from a generation attempt as an iter.Seq2.
-// The second return is an error; on the first non-nil error the iterator
-// stops yielding. ctx cancellation is checked between tokens.
+// Stream tokens from a generation attempt as an iter.Seq2
+// On first non-nil error the iterator stops yielding
+// ctx cancellation is checked between tokens
 func GenIter[T comparable](
 	ctx context.Context,
-	chain GenerativeChain[T],
+	chain Transitioner[T],
 	opts ...GenOption[T],
 ) iter.Seq2[T, error] {
 	cfg := &genConfig[T]{}
@@ -25,10 +26,10 @@ func GenIter[T comparable](
 	return genIterSingle(ctx, chain, cfg)
 }
 
-// Gen collects the iterator into a slice.
+// Gen collects the iterator into a slice
 func Gen[T comparable](
 	ctx context.Context,
-	chain GenerativeChain[T],
+	chain Transitioner[T],
 	opts ...GenOption[T],
 ) ([]T, error) {
 	var out []T
@@ -43,14 +44,12 @@ func Gen[T comparable](
 
 func genIterSingle[T comparable](
 	ctx context.Context,
-	chain GenerativeChain[T],
+	chain Transitioner[T],
 	cfg *genConfig[T],
 ) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		stateSize := chain.StateSize()
 		sentinels := chain.Sentinels()
-		encoder := chain.Encoder()
-		maxOverlap := chain.MaxOverlap()
 
 		// Build initial state, padding with Begin tokens if needed
 		state := make([]T, 0, stateSize)
@@ -86,7 +85,7 @@ func genIterSingle[T comparable](
 			default:
 			}
 
-			next, err := chain.Move(encoder.Encode(state))
+			next, err := chain.Move(state)
 			if err != nil {
 				var zero T
 				yield(zero, err)
@@ -95,15 +94,11 @@ func genIterSingle[T comparable](
 			if next == sentinels.End {
 				return
 			}
-
 			history = append(history, next)
-			if cfg.validator != nil && len(history) >= maxOverlap {
-				gram := history[len(history)-maxOverlap:]
-				if !cfg.validator(gram) {
-					var zero T
-					yield(zero, fmt.Errorf("barkov: n-gram failed validation: %w", ErrSentenceFailedValidation))
-					return
-				}
+			if cfg.validator != nil && !cfg.validator(history) {
+				var zero T
+				yield(zero, fmt.Errorf("barkov: n-gram failed validation: %w", ErrSentenceFailedValidation))
+				return
 			}
 			if !yield(next, nil) {
 				return
@@ -115,12 +110,11 @@ func genIterSingle[T comparable](
 	}
 }
 
-// genIterThreaded fans out workers to generate in parallel.
-// The first worker to complete successfully wins; its tokens are
-// replayed through the iterator.
+// genIterThreaded fans out workers to generate in parallel
+// First worker to complete successfully wins
 func genIterThreaded[T comparable](
 	ctx context.Context,
-	chain GenerativeChain[T],
+	chain Transitioner[T],
 	cfg *genConfig[T],
 ) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
@@ -138,15 +132,12 @@ func genIterThreaded[T comparable](
 
 		// Launch workers
 		for range cfg.parallelism {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 
 				// Build a single-threaded config for this worker
 				workerCfg := &genConfig[T]{
 					seed:      cfg.seed,
 					validator: cfg.validator,
-					pool:      cfg.pool,
 					// parallelism = 0 for single-threaded
 				}
 
@@ -167,7 +158,7 @@ func genIterThreaded[T comparable](
 				case resultCh <- result{tokens: tokens}:
 				case <-workerCtx.Done():
 				}
-			}()
+			})
 		}
 
 		// Close result channel when all workers are done
@@ -186,7 +177,7 @@ func genIterThreaded[T comparable](
 				lastErr = res.err
 				failCount++
 				// If it's a non-retryable error, cancel other workers
-				if res.err == ErrStateNotFound {
+				if errors.Is(res.err, ErrStateNotFound) {
 					cancel()
 				}
 				continue

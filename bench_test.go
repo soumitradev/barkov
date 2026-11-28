@@ -14,6 +14,23 @@ var testCompressed *CompressedChain[string]
 var testValidator func([]string) bool
 var testSeedTokens []string
 
+// Construct a validator that rejects a width-sized token window that appears verbatim in the corpus
+func novelNGrams(corpus [][]string, width int) func([]string) bool {
+	seen := make(map[string]struct{})
+	for _, tokens := range corpus {
+		for i := 0; i+width <= len(tokens); i++ {
+			seen[strings.Join(tokens[i:i+width], SEP)] = struct{}{}
+		}
+	}
+	return func(history []string) bool {
+		if len(history) < width {
+			return true
+		}
+		_, copied := seen[strings.Join(history[len(history)-width:], SEP)]
+		return !copied
+	}
+}
+
 func init() {
 	f, err := os.Open("testdata/corpus_public.txt")
 	if err != nil {
@@ -33,32 +50,24 @@ func init() {
 			testCorpus = append(testCorpus, tokens)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
 
 	testChain = InitChain(4).Build(testCorpus)
 	testCompressed = testChain.Compress()
 
-	// Build map-based n-gram validator (string equivalent of NGramSet)
-	n := testChain.StateSize() + 2
-	grams := make(map[string]struct{})
-	for _, tokens := range testCorpus {
-		for i := 0; i <= len(tokens)-n; i++ {
-			grams[strings.Join(tokens[i:i+n], SEP)] = struct{}{}
-		}
-	}
-	testValidator = func(gram []string) bool {
-		_, found := grams[strings.Join(gram, SEP)]
-		return !found
-	}
+	testValidator = novelNGrams(testCorpus, testChain.StateSize()+2)
 
 	// Find a seed state with low END-transition probability so seeded benchmarks
-	// produce full sentences rather than fast-failing with ErrSentenceTooShort.
+	// produce full sentences rather than fast-failing with ErrSentenceTooShort
 	for _, tokens := range testCorpus {
 		if len(tokens) < 20 {
 			continue
 		}
 		// Take a 4-gram from the middle of a long sentence
 		mid := len(tokens) / 2
-		state := ConstructState(tokens[mid : mid+testChain.stateSize])
+		state := joinKey(tokens[mid : mid+testChain.stateSize])
 		choices, ok := testChain.Model[state]
 		if !ok {
 			continue
@@ -93,28 +102,12 @@ func BenchmarkCompress(b *testing.B) {
 	}
 }
 
-// --- State helpers ---
-
-func BenchmarkConstructState(b *testing.B) {
-	tokens := []string{"Call", "me", "Ishmael", "Some"}
-	for b.Loop() {
-		ConstructState(tokens)
-	}
-}
-
-func BenchmarkDeconstructState(b *testing.B) {
-	state := ConstructState([]string{"Call", "me", "Ishmael", "Some"})
-	for b.Loop() {
-		DeconstructState(state)
-	}
-}
-
 // --- Generation ---
 
 func BenchmarkGen(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
-		Gen(ctx, testCompressed) //nolint
+		Gen(ctx, testCompressed)
 	}
 }
 
@@ -135,21 +128,21 @@ func BenchmarkGenIter(b *testing.B) {
 func BenchmarkGenWithValidator(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
-		Gen(ctx, testCompressed, WithValidator(testValidator)) //nolint
+		Gen(ctx, testCompressed, WithValidator(testValidator))
 	}
 }
 
 func BenchmarkGenThreaded(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
-		Gen(ctx, testCompressed, WithValidator(testValidator), WithThreaded[string]()) //nolint
+		Gen(ctx, testCompressed, WithValidator(testValidator), WithParallelism[string](8))
 	}
 }
 
 func BenchmarkGenWithSeed(b *testing.B) {
 	ctx := context.Background()
 	for b.Loop() {
-		Gen(ctx, testCompressed, WithSeed(testSeedTokens)) //nolint
+		Gen(ctx, testCompressed, WithSeed(testSeedTokens))
 	}
 }
 
