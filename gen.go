@@ -26,14 +26,24 @@ func GenIter[T comparable](
 	return genIterSingle(ctx, chain, cfg)
 }
 
-// Gen collects the iterator into a slice
+// Gen collects a generated sequence into a slice.
 func Gen[T comparable](
 	ctx context.Context,
 	chain Transitioner[T],
 	opts ...GenOption[T],
 ) ([]T, error) {
-	var out []T
-	for tok, err := range GenIter(ctx, chain, opts...) {
+	if len(opts) == 0 {
+		return genSingle(ctx, chain, genConfig[T]{})
+	}
+	var cfg genConfig[T]
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.parallelism <= 1 {
+		return genSingle(ctx, chain, cfg)
+	}
+	out := make([]T, 0, 32)
+	for tok, err := range genIterThreaded(ctx, chain, &cfg) {
 		if err != nil {
 			return nil, err
 		}
@@ -42,47 +52,95 @@ func Gen[T comparable](
 	return out, nil
 }
 
+func initState[T comparable](stateSize int, begin T, seed []T) []T {
+	state := make([]T, 0, stateSize)
+	for i := 0; i < stateSize-len(seed); i++ {
+		state = append(state, begin)
+	}
+	if len(seed) <= stateSize {
+		state = append(state, seed...)
+	} else {
+		state = append(state, seed[len(seed)-stateSize:]...)
+	}
+	return state
+}
+
+func genSingle[T comparable](
+	ctx context.Context,
+	chain Transitioner[T],
+	cfg genConfig[T],
+) ([]T, error) {
+	sentinels := chain.Sentinels()
+	state := initState(chain.StateSize(), sentinels.Begin, cfg.seed)
+
+	out := make([]T, 0, 32)
+	for _, tok := range cfg.seed {
+		if tok != sentinels.Begin && tok != sentinels.End {
+			out = append(out, tok)
+		}
+	}
+
+	done := ctx.Done()
+	for {
+		if done != nil {
+			select {
+			case <-done:
+				return nil, ctx.Err()
+			default:
+			}
+		}
+
+		next, err := chain.Move(state)
+		if err != nil {
+			return nil, err
+		}
+		if next == sentinels.End {
+			return out, nil
+		}
+		out = append(out, next)
+		if cfg.validator != nil && !cfg.validator(out) {
+			return nil, fmt.Errorf("barkov: n-gram failed validation: %w", ErrSentenceFailedValidation)
+		}
+		copy(state, state[1:])
+		state[len(state)-1] = next
+	}
+}
+
 func genIterSingle[T comparable](
 	ctx context.Context,
 	chain Transitioner[T],
 	cfg *genConfig[T],
 ) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		stateSize := chain.StateSize()
 		sentinels := chain.Sentinels()
+		state := initState(chain.StateSize(), sentinels.Begin, cfg.seed)
 
-		// Build initial state, padding with Begin tokens if needed
-		state := make([]T, 0, stateSize)
-		for i := 0; i < stateSize-len(cfg.seed); i++ {
-			state = append(state, sentinels.Begin)
-		}
-		if len(cfg.seed) <= stateSize {
-			state = append(state, cfg.seed...)
-		} else {
-			// Seed is longer than state size, use the last stateSize tokens
-			state = append(state, cfg.seed[len(cfg.seed)-stateSize:]...)
+		var history []T
+		if cfg.validator != nil {
+			history = make([]T, 0, 64)
 		}
 
-		// Track history for validator
-		history := make([]T, 0, 64)
-
-		// Yield seed tokens (without sentinels) up front
 		for _, tok := range cfg.seed {
 			if tok != sentinels.Begin && tok != sentinels.End {
-				history = append(history, tok)
+				if cfg.validator != nil {
+					history = append(history, tok)
+				}
 				if !yield(tok, nil) {
 					return
 				}
 			}
 		}
 
+		done := ctx.Done()
 		for {
-			select {
-			case <-ctx.Done():
-				var zero T
-				yield(zero, ctx.Err())
-				return
-			default:
+			if done != nil {
+				select {
+				case <-done:
+					var zero T
+					yield(zero, ctx.Err())
+					return
+				default:
+				}
 			}
 
 			next, err := chain.Move(state)
@@ -94,16 +152,17 @@ func genIterSingle[T comparable](
 			if next == sentinels.End {
 				return
 			}
-			history = append(history, next)
-			if cfg.validator != nil && !cfg.validator(history) {
-				var zero T
-				yield(zero, fmt.Errorf("barkov: n-gram failed validation: %w", ErrSentenceFailedValidation))
-				return
+			if cfg.validator != nil {
+				history = append(history, next)
+				if !cfg.validator(history) {
+					var zero T
+					yield(zero, fmt.Errorf("barkov: n-gram failed validation: %w", ErrSentenceFailedValidation))
+					return
+				}
 			}
 			if !yield(next, nil) {
 				return
 			}
-			// Shift state window
 			copy(state, state[1:])
 			state[len(state)-1] = next
 		}
@@ -134,24 +193,17 @@ func genIterThreaded[T comparable](
 		for range cfg.parallelism {
 			wg.Go(func() {
 
-				// Build a single-threaded config for this worker
-				workerCfg := &genConfig[T]{
+				workerCfg := genConfig[T]{
 					seed:      cfg.seed,
 					validator: cfg.validator,
-					// parallelism = 0 for single-threaded
 				}
-
-				var tokens []T
-				for tok, err := range genIterSingle(workerCtx, chain, workerCfg) {
-					if err != nil {
-						// Check if it's a validation failure (retryable) vs state not found (not retryable)
-						select {
-						case resultCh <- result{err: err}:
-						case <-workerCtx.Done():
-						}
-						return
+				tokens, err := genSingle(workerCtx, chain, workerCfg)
+				if err != nil {
+					select {
+					case resultCh <- result{err: err}:
+					case <-workerCtx.Done():
 					}
-					tokens = append(tokens, tok)
+					return
 				}
 
 				select {

@@ -77,6 +77,11 @@ func (c *Chain) Move(state []TokenID) (TokenID, error) {
 	if !ok {
 		return 0, fmt.Errorf("state %v not in model: %w", state, barkov.ErrStateNotFound)
 	}
+
+	// If there's only one choice, directly convert from TokenID
+	if idx.Count == 1 {
+		return TokenID(idx.Offset), nil
+	}
 	return c.Pick(idx), nil
 }
 
@@ -88,7 +93,16 @@ func Build(stateSize int, corpus [][]TokenID) *Chain {
 		},
 		Key: packedKey,
 	}
-	return &Chain{barkov.NewChain(cfg).Build(corpus).Compress()}
+	compressed := barkov.NewChain(cfg).Build(corpus).Compress()
+	for key, idx := range compressed.Model {
+		// Clever optimization thanks Claude
+		if idx.Count == 1 {
+			// If there's only one choice set the token ID directly
+			idx.Offset = uint32(compressed.Choices[idx.Offset])
+			compressed.Model[key] = idx
+		}
+	}
+	return &Chain{compressed}
 }
 
 // Just a way to pack tokenIDs into string
